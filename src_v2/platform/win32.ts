@@ -23,6 +23,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn, execFileSync } from "node:child_process";
 import { bridgeEnvironmentValues, codexConfigPath, codexHomePath, BRIDGE_ENVIRONMENT_VARIABLES } from "./paths.js";
+import { runPowerShell } from "./powershell.js";
 import type { DesktopAppServerState, DesktopController } from "./types.js";
 
 /** Image names to terminate when restarting the Desktop client. */
@@ -38,7 +39,6 @@ const DESKTOP_IMAGE_NAMES = [
 /** MSIX package names that can host the Codex Desktop client, best first. */
 const DESKTOP_PACKAGE_NAMES = ["OpenAI.Codex", "OpenAI.ChatGPT-Desktop"];
 
-const POWERSHELL_TIMEOUT_MS = 20000;
 const DISCOVERY_CACHE_TTL_MS = 60_000;
 
 type PackageInfo = {
@@ -49,20 +49,6 @@ type PackageInfo = {
 };
 
 let cachedPackage: { at: number; value: PackageInfo | null } | null = null;
-
-function powerShellExecutable(): string {
-  const systemRoot = process.env.SystemRoot || process.env.SYSTEMROOT || "C:\\Windows";
-  const candidate = path.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-  return fs.existsSync(candidate) ? candidate : "powershell.exe";
-}
-
-function runPowerShell(script: string, timeout = POWERSHELL_TIMEOUT_MS): string {
-  return execFileSync(
-    powerShellExecutable(),
-    ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
-    { encoding: "utf-8", timeout, stdio: ["ignore", "pipe", "ignore"], windowsHide: true },
-  ).trim();
-}
 
 function isFile(candidate: string): boolean {
   try { return Boolean(candidate) && fs.existsSync(candidate) && fs.statSync(candidate).isFile(); } catch { return false; }

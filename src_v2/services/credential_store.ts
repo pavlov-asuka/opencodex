@@ -6,8 +6,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { spawnSync } from "node:child_process";
 import { ProviderConfig } from "../core/types.js";
+import { secretStore } from "../platform/secrets.js";
 
 /**
  * Restore-native keeps provider identities, endpoints, and credentials, but
@@ -54,7 +54,7 @@ export class CredentialStore {
         const raw = fs.readFileSync(CredentialStore.providersConfigPath, "utf-8");
         const data = JSON.parse(raw);
         CredentialStore.cachedProviders = Array.isArray(data) ? data : data.providers || [];
-        if (process.platform === "darwin") {
+        if (secretStore.available) {
           let migrated = false;
           for (const provider of CredentialStore.cachedProviders as any[]) {
             if (provider.api_key && !provider.credential_ref) {
@@ -62,7 +62,7 @@ export class CredentialStore {
                 CredentialStore.storeProviderSecret(provider, provider.api_key);
                 migrated = true;
               } catch (error: any) {
-                console.error(`[OpenCodex] Could not migrate ${provider.name} credential to Keychain: ${error.message}`);
+                console.error(`[OpenCodex] Could not migrate ${provider.name} credential to ${secretStore.label}: ${error.message}`);
               }
             }
           }
@@ -102,8 +102,8 @@ export class CredentialStore {
   }
 
   private static storeProviderSecret(provider: any, apiKey: string): void {
-    if (process.platform !== "darwin") {
-      throw new Error("OpenCodex provider credentials require macOS Keychain");
+    if (!secretStore.available) {
+      throw new Error(`OpenCodex cannot store provider credentials on ${process.platform}`);
     }
     const account = `provider:${String(provider.name || "custom")}`;
     CredentialStore.writeKeychainSecret(CredentialStore.providerService, account, apiKey);
@@ -112,22 +112,15 @@ export class CredentialStore {
   }
 
   public static writeKeychainSecret(service: string, account: string, secret: string): void {
-    if (process.platform !== "darwin") {
-      throw new Error("OpenCodex credentials require macOS Keychain");
+    if (!secretStore.available) {
+      throw new Error(`OpenCodex cannot store credentials on ${process.platform}`);
     }
-    const result = spawnSync("security", [
-      "add-generic-password", "-U", "-a", account, "-s", service, "-w", secret
-    ], { encoding: "utf-8" });
-    if (result.status !== 0) {
-      throw new Error(result.stderr?.trim() || "Could not save credential to Keychain");
-    }
+    secretStore.write(service, account, secret);
   }
 
   public static deleteKeychainSecret(service: string, account: string): void {
-    if (process.platform !== "darwin") return;
-    spawnSync("security", [
-      "delete-generic-password", "-a", account, "-s", service
-    ], { encoding: "utf-8" });
+    if (!secretStore.available) return;
+    secretStore.remove(service, account);
   }
 
   public static saveProviders(providers: ProviderConfig[]): void {
@@ -164,23 +157,14 @@ export class CredentialStore {
   }
 
   private static readProviderSecret(reference: string): string {
-    if (process.platform !== "darwin" || !reference.startsWith(`keychain:${CredentialStore.providerService}:`)) return "";
+    if (!secretStore.available || !reference.startsWith(`keychain:${CredentialStore.providerService}:`)) return "";
     const account = reference.slice(`keychain:${CredentialStore.providerService}:`.length);
-    const result = spawnSync("security", [
-      "find-generic-password", "-a", account, "-s", CredentialStore.providerService, "-w"
-    ], { encoding: "utf-8" });
-    return result.status === 0 ? result.stdout.trim() : "";
+    return secretStore.read(CredentialStore.providerService, account);
   }
 
   public static readKeychainSecret(service: string, reference: string | undefined): string {
-    if (typeof reference !== "string" || !reference.startsWith(`keychain:${service}:`) || process.platform !== "darwin") return "";
+    if (typeof reference !== "string" || !reference.startsWith(`keychain:${service}:`) || !secretStore.available) return "";
     const account = reference.slice(`keychain:${service}:`.length);
-    const result = spawnSync("security", [
-      "find-generic-password",
-      "-a", account,
-      "-s", service,
-      "-w"
-    ], { encoding: "utf-8" });
-    return result.status === 0 ? result.stdout.trim() : "";
+    return secretStore.read(service, account);
   }
 }

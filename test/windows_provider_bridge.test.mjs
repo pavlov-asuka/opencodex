@@ -99,6 +99,35 @@ test("the launcher runs its sibling script and passes argv, stdio and exit code 
   }
 });
 
+test("provider credentials can be stored on this platform", async () => {
+  const { secretStore } = await import("../dist/platform/secrets.js");
+  // macOS uses the Keychain and Windows uses DPAPI. Before this existed the
+  // Windows path threw "require macOS Keychain", so no API key could be saved
+  // at all and every third-party provider was unusable.
+  assert.equal(secretStore.available, isWindows || process.platform === "darwin");
+  if (!secretStore.available) return;
+
+  const service = "OpenCodex Test Service";
+  const account = `provider:__unit_${process.pid}__`;
+  const secret = 'sk-unit-中文-!@#$%^&*()_+-=[]{}|;:\'",.<>/?`~';
+  try {
+    secretStore.write(service, account, secret);
+    assert.equal(secretStore.read(service, account), secret, "round trip must preserve the exact bytes");
+    secretStore.remove(service, account);
+    assert.equal(secretStore.read(service, account), "", "removal must clear the secret");
+  } finally {
+    secretStore.remove(service, account);
+  }
+});
+
+test("stored credentials never land in providers.json", async () => {
+  // saveProviders() strips api_key, so a credential that failed to reach the
+  // OS store would be silently dropped rather than written in the clear.
+  const source = readFileSync(fileURLToPath(new URL("../src_v2/services/credential_store.ts", import.meta.url)), "utf8");
+  assert.match(source, /const \{ api_key: _apiKey, refresh_token: _refreshToken, \.\.\.safeProvider \} = provider/);
+  assert.doesNotMatch(source, /require macOS Keychain/);
+});
+
 test("Windows discovery never returns the bridge as its own delegate", { skip: !isWindows }, () => {
   const bridge = desktopController.providerBridgePath();
   const native = desktopController.nativeCodexExecutablePath();
