@@ -365,6 +365,18 @@ function getRegistryContextWindow(value: any): number | undefined {
   return contextWindowSource(value) === "model_registry" ? context : undefined;
 }
 
+/**
+ * Multi-agent protocol version advertised for third-party models.
+ *
+ * Codex only offers a model to spawn_agent when its catalog entry carries a
+ * multi_agent_version. Set OPENCODEX_MULTI_AGENT_VERSION to "v2" to opt in to
+ * the newer protocol, or to an empty value to leave the field off entirely.
+ */
+export function multiAgentVersion(): string | null {
+  const configured = String(process.env.OPENCODEX_MULTI_AGENT_VERSION ?? "v1").trim();
+  return configured ? configured : null;
+}
+
 export function buildFullCatalogEntry(
   modelSlug: string,
   providerName: string,
@@ -430,6 +442,13 @@ export function buildFullCatalogEntry(
     minimal_client_version: "0.0.1",
     supported_in_api: true,
     upgrade: null,
+    // Codex gates multi-agent participation on this field: a model without it
+    // is not offered to spawn_agent, which is why selecting a third-party model
+    // as a subagent reported that it was not in the available subagent list.
+    // "v1" is the protocol the stock default subagent model advertises; "v2"
+    // additionally goes with `tool_mode: "code_mode_only"`, which third-party
+    // providers do not implement. OPENCODEX_MULTI_AGENT_VERSION overrides it.
+    multi_agent_version: multiAgentVersion(),
     priority: 100,
     prefer_websockets: false,
     available_in_plans: ["free", "plus", "pro", "team", "business", "enterprise"],

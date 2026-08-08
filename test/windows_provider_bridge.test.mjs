@@ -122,6 +122,18 @@ test("a Windows catalog path does not corrupt config.toml", async () => {
   assert.equal(tomlString("C:\\it's\\odd"), '"C:\\\\it\'s\\\\odd"');
 });
 
+test("third-party models are eligible as Codex subagents", async () => {
+  const { buildFullCatalogEntry, multiAgentVersion } = await import("../dist/services/catalog_sync.js");
+
+  // Codex only offers a model to spawn_agent when its catalog entry carries a
+  // multi_agent_version. Without it, selecting a third-party model as a
+  // subagent fails with "not registered in the available subagent list".
+  assert.equal(multiAgentVersion(), "v1");
+
+  const entry = buildFullCatalogEntry("deepseek", "deepseek-v4-flash", {}, "responses");
+  assert.equal(entry.multi_agent_version, "v1");
+});
+
 test("a gateway that loses the port race cannot detach the running one", () => {
   const source = readFileSync(fileURLToPath(new URL("../src_v2/server/gateway.ts", import.meta.url)), "utf8");
 
