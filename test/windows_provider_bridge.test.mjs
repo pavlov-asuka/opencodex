@@ -99,6 +99,22 @@ test("the launcher runs its sibling script and passes argv, stdio and exit code 
   }
 });
 
+test("a gateway that loses the port race cannot detach the running one", () => {
+  const source = readFileSync(fileURLToPath(new URL("../src_v2/server/gateway.ts", import.meta.url)), "utf8");
+
+  // Registration must happen inside the listen callback. When it ran before
+  // listen(), a second gateway would publish its own CODEX_CLI_PATH, fail with
+  // EADDRINUSE, and then unregister on the way out — leaving the healthy
+  // instance's Desktop pointed at variables that no longer existed.
+  const listenAt = source.indexOf('this.server.listen(this.port, "127.0.0.1"');
+  const registerAt = source.indexOf("registerProviderBridgeEnvironment(this.port)");
+  assert.ok(listenAt >= 0, "listen call must exist");
+  assert.ok(registerAt > listenAt, "the bridge environment must be published only after the port is held");
+
+  // And only the instance that registered may unregister.
+  assert.match(source, /if \(this\.registeredProviderBridge\) \{[\s\S]{0,160}unregisterProviderBridgeEnvironment\(\);/);
+});
+
 test("provider credentials can be stored on this platform", async () => {
   const { secretStore } = await import("../dist/platform/secrets.js");
   // macOS uses the Keychain and Windows uses DPAPI. Before this existed the

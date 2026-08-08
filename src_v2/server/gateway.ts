@@ -957,6 +957,10 @@ export class CodexBridgeServer {
   private server: http.Server | null = null;
   private serverLockFd: number | null = null;
   private serverLockPath = "";
+  // Only the instance that actually published the bridge environment may clear
+  // it again. A second gateway that loses the port race must not detach the
+  // Desktop client belonging to the instance that won.
+  private registeredProviderBridge = false;
   private gatewayRestartInProgress = false;
   private router = new GatewayRouter();
   private claudeModelFetchError = "";
@@ -2866,14 +2870,6 @@ if __name__ == "__main__":
         }
       }, 2000);
       delayedCatalogSync.unref?.();
-    }
-    if (registerProviderBridgeEnvironment(this.port)) {
-      const desktopState = desktopAppServerState();
-      if (desktopState !== "bridge") {
-        this.requestDesktopLaunchAfterGatewayReady();
-      } else {
-        console.log("[OpenCodex Gateway] Desktop is already attached to the provider bridge; gateway startup will not restart it.");
-      }
     }
     return new Promise(async (resolve, reject) => {
       this.server = http.createServer(async (req, res) => {
@@ -6481,6 +6477,18 @@ if __name__ == "__main__":
 
       this.server.listen(this.port, "127.0.0.1", () => {
         console.log(`[CodexBridge V2] Server listening on http://127.0.0.1:${this.port}`);
+        // Publish the bridge environment only once the port is actually held.
+        // Registering earlier meant a second gateway could overwrite a healthy
+        // instance's variables and then clear them entirely when it exited on
+        // EADDRINUSE, silently detaching Desktop from the running bridge.
+        if (registerProviderBridgeEnvironment(this.port)) {
+          this.registeredProviderBridge = true;
+          if (desktopAppServerState() !== "bridge") {
+            this.requestDesktopLaunchAfterGatewayReady();
+          } else {
+            console.log("[OpenCodex Gateway] Desktop is already attached to the provider bridge; gateway startup will not restart it.");
+          }
+        }
         // GPT-Live's floating picker is opt-in. Do not relaunch a persisted
         // picker just because the DMG/gateway has started; the settings POST
         // below is the explicit user action that starts it.
@@ -6820,7 +6828,10 @@ if __name__ == "__main__":
 
   public stop(): Promise<void> {
     return new Promise((resolve) => {
-      unregisterProviderBridgeEnvironment();
+      if (this.registeredProviderBridge) {
+        this.registeredProviderBridge = false;
+        unregisterProviderBridgeEnvironment();
+      }
       this.stopLivePickerOverlay();
       if (this.server) {
         this.server.close(() => {
