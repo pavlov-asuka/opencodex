@@ -1,0 +1,43 @@
+/**
+ * Shared filesystem locations for the Codex install.
+ *
+ * This lives outside `server/gateway.ts` so the platform controllers can reach
+ * it without importing the gateway module back (which would be circular).
+ */
+
+import os from "node:os";
+import path from "node:path";
+
+export function codexHomePath(): string {
+  const configured = String(process.env.CODEX_HOME || "").trim();
+  return configured || path.join(os.homedir(), ".codex");
+}
+
+export function codexConfigPath(): string {
+  const configured = String(process.env.OPENCODEX_CODEX_CONFIG_PATH || "").trim();
+  return configured || path.join(codexHomePath(), "config.toml");
+}
+
+/**
+ * Environment variables the Desktop client needs in order to route third-party
+ * turns through the provider bridge. `CODEX_CLI_PATH` is the one the Codex
+ * Electron app actually reads when it resolves the app-server binary; the
+ * `OPENCODEX_*` entries are consumed by the bridge process itself.
+ */
+export const BRIDGE_ENVIRONMENT_VARIABLES = [
+  "CODEX_CLI_PATH",
+  "OPENCODEX_NATIVE_CODEX_PATH",
+  "OPENCODEX_PROVIDER_BRIDGE_PATH",
+  "OPENCODEX_PROVIDER_SPLIT",
+  "OPENCODEX_GATEWAY_PORT",
+] as const;
+
+export function bridgeEnvironmentValues(bridge: string, nativeCodex: string, port: number): Record<string, string> {
+  return {
+    CODEX_CLI_PATH: bridge,
+    OPENCODEX_NATIVE_CODEX_PATH: nativeCodex,
+    OPENCODEX_PROVIDER_BRIDGE_PATH: bridge,
+    OPENCODEX_PROVIDER_SPLIT: "1",
+    OPENCODEX_GATEWAY_PORT: String(Number.isInteger(port) && port > 0 ? port : 8765),
+  };
+}

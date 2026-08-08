@@ -1,0 +1,25 @@
+[package]
+name = "codex-provider-bridge-launcher"
+version = "1.2.0"
+edition = "2021"
+description = "Windows launcher shim that lets Codex Desktop spawn the OpenCodex provider bridge"
+license = "MIT"
+publish = false
+
+# The Codex Desktop client resolves its app-server through CODEX_CLI_PATH and
+# then spawns it with child_process.spawn and no shell, so the target has to be
+# a real PE executable rather than the .cmd/.sh launcher used on macOS.
+[[bin]]
+name = "codex-provider-bridge"
+path = "src/main.rs"
+
+[dependencies]
+# Intentionally none: the Windows packaging step must build offline, so the
+# handful of Win32 calls needed are declared directly.
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,12 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import readline from "node:readline";
+import { writeFakeNativeAppServer } from "./helpers/fake_native_app_server.mjs";
 
 const fakeNativeSource = `#!/usr/bin/env node
 import fs from "node:fs";
@@ -165,10 +166,8 @@ async function waitForTraceEntries(traceFile, predicate, timeoutMs = 2000) {
 
 test("provider bridge keeps a resumed third-party thread on the gateway when turn/start omits model", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "opencodex-provider-bridge-protocol-"));
-  const fakeNativePath = join(tempRoot, "fake-native-app-server.mjs");
   const emptyCatalogPath = join(tempRoot, "empty-catalog.json");
-  await writeFile(fakeNativePath, fakeNativeSource, "utf8");
-  await chmod(fakeNativePath, 0o755);
+  const fakeNativePath = await writeFakeNativeAppServer(tempRoot, fakeNativeSource);
   await writeFile(emptyCatalogPath, JSON.stringify({ models: [] }), "utf8");
 
   const bridgePath = fileURLToPath(new URL("../dist/codex-provider-bridge.js", import.meta.url));
@@ -239,10 +238,8 @@ test("provider bridge keeps a resumed third-party thread on the gateway when tur
 
 test("a new thread can begin on Gemini after native thread/start created its rollout", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "opencodex-provider-bridge-new-thread-"));
-  const fakeNativePath = join(tempRoot, "fake-native-app-server.mjs");
   const emptyCatalogPath = join(tempRoot, "empty-catalog.json");
-  await writeFile(fakeNativePath, fakeNativeSource, "utf8");
-  await chmod(fakeNativePath, 0o755);
+  const fakeNativePath = await writeFakeNativeAppServer(tempRoot, fakeNativeSource);
   await writeFile(emptyCatalogPath, JSON.stringify({ models: [] }), "utf8");
 
   const bridgePath = fileURLToPath(new URL("../dist/codex-provider-bridge.js", import.meta.url));
@@ -308,11 +305,9 @@ test("a new thread can begin on Gemini after native thread/start created its rol
 
 test("a fresh native thread with no materialized history can start a third-party turn", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "opencodex-provider-bridge-unmaterialized-"));
-  const fakeNativePath = join(tempRoot, "fake-native-app-server.mjs");
   const emptyCatalogPath = join(tempRoot, "empty-catalog.json");
   const traceFile = join(tempRoot, "trace.jsonl");
-  await writeFile(fakeNativePath, fakeNativeSource, "utf8");
-  await chmod(fakeNativePath, 0o755);
+  const fakeNativePath = await writeFakeNativeAppServer(tempRoot, fakeNativeSource);
   await writeFile(emptyCatalogPath, JSON.stringify({ models: [] }), "utf8");
 
   const bridgePath = fileURLToPath(new URL("../dist/codex-provider-bridge.js", import.meta.url));
@@ -383,10 +378,8 @@ test("a fresh native thread with no materialized history can start a third-party
 
 test("provider-only native switch escapes an unavailable gateway in the same thread", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "opencodex-provider-bridge-offline-"));
-  const fakeNativePath = join(tempRoot, "fake-native-app-server.mjs");
   const emptyCatalogPath = join(tempRoot, "empty-catalog.json");
-  await writeFile(fakeNativePath, fakeNativeSource, "utf8");
-  await chmod(fakeNativePath, 0o755);
+  const fakeNativePath = await writeFakeNativeAppServer(tempRoot, fakeNativeSource);
   await writeFile(emptyCatalogPath, JSON.stringify({ models: [] }), "utf8");
 
   const bridgePath = fileURLToPath(new URL("../dist/codex-provider-bridge.js", import.meta.url));
@@ -448,10 +441,8 @@ test("provider-only native switch escapes an unavailable gateway in the same thr
 
 test("the explicitly selected official model takes over after a failed third-party turn", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "opencodex-provider-bridge-selected-native-"));
-  const fakeNativePath = join(tempRoot, "fake-native-app-server.mjs");
   const emptyCatalogPath = join(tempRoot, "empty-catalog.json");
-  await writeFile(fakeNativePath, fakeNativeSource, "utf8");
-  await chmod(fakeNativePath, 0o755);
+  const fakeNativePath = await writeFakeNativeAppServer(tempRoot, fakeNativeSource);
   await writeFile(emptyCatalogPath, JSON.stringify({
     models: [{ slug: "gpt-5.6-sol", provider: "opencodex" }],
   }), "utf8");
@@ -534,11 +525,9 @@ test("the explicitly selected official model takes over after a failed third-par
 
 test("bringing the gateway back restores third-party turns without restarting the bridge", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "opencodex-provider-bridge-recovery-"));
-  const fakeNativePath = join(tempRoot, "fake-native-app-server.mjs");
   const emptyCatalogPath = join(tempRoot, "empty-catalog.json");
   const offlineMarker = join(tempRoot, "gateway-offline");
-  await writeFile(fakeNativePath, fakeNativeSource, "utf8");
-  await chmod(fakeNativePath, 0o755);
+  const fakeNativePath = await writeFakeNativeAppServer(tempRoot, fakeNativeSource);
   await writeFile(emptyCatalogPath, JSON.stringify({ models: [] }), "utf8");
   await writeFile(offlineMarker, "offline", "utf8");
 
@@ -603,11 +592,9 @@ test("bringing the gateway back restores third-party turns without restarting th
 
 test("third-party context is mirrored into the native thread and GPT never resumes a gateway thread", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "opencodex-provider-bridge-canonical-history-"));
-  const fakeNativePath = join(tempRoot, "fake-native-app-server.mjs");
   const emptyCatalogPath = join(tempRoot, "empty-catalog.json");
   const traceFile = join(tempRoot, "trace.jsonl");
-  await writeFile(fakeNativePath, fakeNativeSource, "utf8");
-  await chmod(fakeNativePath, 0o755);
+  const fakeNativePath = await writeFakeNativeAppServer(tempRoot, fakeNativeSource);
   await writeFile(emptyCatalogPath, JSON.stringify({ models: [] }), "utf8");
 
   const bridgePath = fileURLToPath(new URL("../dist/codex-provider-bridge.js", import.meta.url));
@@ -704,11 +691,9 @@ test("third-party context is mirrored into the native thread and GPT never resum
 
 test("an old third-party session migrates locally before an official GPT turn", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "opencodex-provider-bridge-legacy-migration-"));
-  const fakeNativePath = join(tempRoot, "fake-native-app-server.mjs");
   const emptyCatalogPath = join(tempRoot, "empty-catalog.json");
   const traceFile = join(tempRoot, "trace.jsonl");
-  await writeFile(fakeNativePath, fakeNativeSource, "utf8");
-  await chmod(fakeNativePath, 0o755);
+  const fakeNativePath = await writeFakeNativeAppServer(tempRoot, fakeNativeSource);
   await writeFile(emptyCatalogPath, JSON.stringify({ models: [] }), "utf8");
 
   const bridgePath = fileURLToPath(new URL("../dist/codex-provider-bridge.js", import.meta.url));

@@ -1,12 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import readline from "node:readline";
+import { writeFakeNativeAppServer } from "./helpers/fake_native_app_server.mjs";
 import {
   classifyProviderModel,
   isNativeSubagentRequest,
@@ -82,7 +83,6 @@ test("native child routing is request-scoped and leaves the native provider unto
 
 test("native app-server child request crosses the external bridge into the gateway", async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), "opencodex-native-egress-"));
-  const fakeNativePath = join(tempRoot, "fake-native-egress.mjs");
   const tracePath = join(tempRoot, "egress-trace.json");
   const settingsTracePath = join(tempRoot, "settings-trace.jsonl");
 const fakeNativeSource = `#!/usr/bin/env node
@@ -159,8 +159,7 @@ const handleLine = async (line) => {
 };
 rl.on("line", (line) => { void handleLine(line); });
 `;
-  await writeFile(fakeNativePath, fakeNativeSource, "utf8");
-  await chmod(fakeNativePath, 0o755);
+  const fakeNativePath = await writeFakeNativeAppServer(tempRoot, fakeNativeSource, "fake-native-egress");
 
   const seen = [];
   const gateway = http.createServer((req, res) => {
@@ -275,9 +274,12 @@ test("1.1.5 managed config keeps native OpenAI as the global default", () => {
 });
 
 test("1.1.5 uses an official canonical thread and isolated third-party turns", async () => {
-  const [source, launcher] = await Promise.all([
+  const [source, launcher, bridgeEnv, darwin, win32] = await Promise.all([
     readFile(new URL("../src_v2/codex-provider-bridge.ts", import.meta.url), "utf8"),
     readFile(new URL("../src_v2/server/gateway.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src_v2/platform/paths.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src_v2/platform/darwin.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src_v2/platform/win32.ts", import.meta.url), "utf8"),
   ]);
   assert.match(source, /thread\/inject_items/);
   assert.match(source, /spawnRuntime/);
@@ -293,10 +295,19 @@ test("1.1.5 uses an official canonical thread and isolated third-party turns", a
   assert.doesNotMatch(source, /switchProviderThenRequest/);
   assert.doesNotMatch(source, /providerResumeRequest/);
   assert.doesNotMatch(source, /activeRuntime/);
-  assert.match(launcher, /CODEX_CLI_PATH: bridge/);
-  assert.match(launcher, /OPENCODEX_NATIVE_CODEX_PATH/);
+  // The Desktop lifecycle moved into src_v2/platform so Windows can publish the
+  // same bridge environment macOS does. The guarantees are unchanged; they are
+  // asserted against the module that now owns each one.
+  assert.match(bridgeEnv, /CODEX_CLI_PATH: bridge/);
+  assert.match(bridgeEnv, /OPENCODEX_NATIVE_CODEX_PATH/);
+  assert.match(darwin, /launchctl.*setenv/);
+  // Windows has no launchd: the session-wide equivalent is HKCU\Environment.
+  assert.match(win32, /HKCU\\\\Environment/);
+  assert.doesNotMatch(win32, /execFileSync\(\s*"\/bin\/launchctl"/);
+  // Codex Desktop spawns CODEX_CLI_PATH without a shell, so the Windows
+  // launcher has to be a real executable rather than a .cmd wrapper.
+  assert.match(win32, /codex-provider-bridge\.exe/);
   assert.match(launcher, /registerProviderBridgeEnvironment/);
-  assert.match(launcher, /launchctl.*setenv/);
   assert.match(launcher, /unregisterProviderBridgeEnvironment/);
   assert.match(launcher, /desktopAppServerState/);
   const stopStart = launcher.indexOf("public stop(): Promise<void>");

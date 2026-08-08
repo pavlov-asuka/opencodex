@@ -25,3 +25,9 @@ archives/
 # Xcode per-user state is machine-specific and must not be published.
 mobile/OpenCodexMobile.xcodeproj/xcuserdata/
 mobile/OpenCodexMobile.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Windows packaging output
+build/
+
+# Rust launcher build artifacts
+native/*/target/

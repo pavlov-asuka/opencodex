@@ -690,8 +690,17 @@ export function normalizeThreadListParams(params: JsonRecord = {}): JsonRecord {
 }
 
 function nativeCodexPath(): string {
-  return cleanString(process.env.OPENCODEX_NATIVE_CODEX_PATH)
-    || "/Applications/ChatGPT.app/Contents/Resources/codex";
+  const configured = cleanString(process.env.OPENCODEX_NATIVE_CODEX_PATH);
+  if (configured) return configured;
+  // The gateway normally publishes OPENCODEX_NATIVE_CODEX_PATH before Desktop
+  // starts. Keep a per-platform default so a bridge launched by hand still
+  // finds the native app-server instead of a macOS-only bundle path.
+  if (process.platform === "win32") {
+    const codexHome = cleanString(process.env.CODEX_HOME)
+      || path.join(os.homedir(), ".codex");
+    return path.join(codexHome, "plugins", ".plugin-appserver", "codex.exe");
+  }
+  return "/Applications/ChatGPT.app/Contents/Resources/codex";
 }
 
 function isAppServerInvocation(args: string[]): boolean {
