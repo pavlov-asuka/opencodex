@@ -368,12 +368,22 @@ function getRegistryContextWindow(value: any): number | undefined {
 /**
  * Multi-agent protocol version advertised for third-party models.
  *
- * Codex only offers a model to spawn_agent when its catalog entry carries a
- * multi_agent_version. Set OPENCODEX_MULTI_AGENT_VERSION to "v2" to opt in to
- * the newer protocol, or to an empty value to leave the field off entirely.
+ * Codex builds the spawn_agent model list from this field, and only "v2"
+ * qualifies. With the stock catalog the tool reports:
+ *
+ *   Unknown model `...` for spawn_agent.
+ *   Available models: gpt-5.6-sol, gpt-5.6-terra
+ *
+ * which is exactly the set of entries marked "v2"; gpt-5.6-luna carries "v1"
+ * and is not offered, even though it is the configured default_subagent_model.
+ * Models with no value at all are likewise invisible, which is why imported
+ * third-party models could never be selected as subagents.
+ *
+ * OPENCODEX_MULTI_AGENT_VERSION overrides the value, or omits the field when
+ * set to an empty string.
  */
 export function multiAgentVersion(): string | null {
-  const configured = String(process.env.OPENCODEX_MULTI_AGENT_VERSION ?? "v1").trim();
+  const configured = String(process.env.OPENCODEX_MULTI_AGENT_VERSION ?? "v2").trim();
   return configured ? configured : null;
 }
 
@@ -445,9 +455,7 @@ export function buildFullCatalogEntry(
     // Codex gates multi-agent participation on this field: a model without it
     // is not offered to spawn_agent, which is why selecting a third-party model
     // as a subagent reported that it was not in the available subagent list.
-    // "v1" is the protocol the stock default subagent model advertises; "v2"
-    // additionally goes with `tool_mode: "code_mode_only"`, which third-party
-    // providers do not implement. OPENCODEX_MULTI_AGENT_VERSION overrides it.
+    // Only "v2" entries are offered by spawn_agent; see multiAgentVersion().
     multi_agent_version: multiAgentVersion(),
     priority: 100,
     prefer_websockets: false,

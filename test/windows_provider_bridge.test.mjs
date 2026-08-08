@@ -125,13 +125,14 @@ test("a Windows catalog path does not corrupt config.toml", async () => {
 test("third-party models are eligible as Codex subagents", async () => {
   const { buildFullCatalogEntry, multiAgentVersion } = await import("../dist/services/catalog_sync.js");
 
-  // Codex only offers a model to spawn_agent when its catalog entry carries a
-  // multi_agent_version. Without it, selecting a third-party model as a
-  // subagent fails with "not registered in the available subagent list".
-  assert.equal(multiAgentVersion(), "v1");
+  // Codex builds the spawn_agent model list from multi_agent_version and only
+  // "v2" qualifies: the stock tool reports "Available models: gpt-5.6-sol,
+  // gpt-5.6-terra", exactly the v2 entries. A "v1" model such as gpt-5.6-luna
+  // is not offered, so emitting v1 would leave third-party models unusable.
+  assert.equal(multiAgentVersion(), "v2");
 
   const entry = buildFullCatalogEntry("deepseek", "deepseek-v4-flash", {}, "responses");
-  assert.equal(entry.multi_agent_version, "v1");
+  assert.equal(entry.multi_agent_version, "v2");
 });
 
 test("a gateway that loses the port race cannot detach the running one", () => {
