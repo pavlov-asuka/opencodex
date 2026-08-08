@@ -99,6 +99,29 @@ test("the launcher runs its sibling script and passes argv, stdio and exit code 
   }
 });
 
+test("a Windows catalog path does not corrupt config.toml", async () => {
+  const { buildManagedCodexConfig, tomlString } = await import("../dist/server/gateway.js");
+  const windowsPath = "C:\\Users\\Administrator\\.opencodex\\custom_model_catalog.json";
+
+  // A TOML basic string reads backslash as an escape introducer, so writing the
+  // path as "C:\Users\..." makes \U an invalid Unicode escape and the entire
+  // file unparseable — Codex then fails everywhere, including Windows sandbox
+  // setup. A literal string carries the path verbatim.
+  assert.equal(tomlString(windowsPath), `'${windowsPath}'`);
+
+  const config = buildManagedCodexConfig("", 8765, "token-123", windowsPath);
+  assert.match(config, /model_catalog_json = '[^']*custom_model_catalog\.json'/);
+
+  // No basic string in the generated block may carry a raw backslash.
+  for (const [, value] of config.matchAll(/=\s*"([^"\n]*)"/g)) {
+    assert.ok(!value.includes("\\"), `unescaped backslash in a TOML basic string: ${value}`);
+  }
+
+  // Values containing an apostrophe cannot use a literal string, so they fall
+  // back to the escaped basic form.
+  assert.equal(tomlString("C:\\it's\\odd"), '"C:\\\\it\'s\\\\odd"');
+});
+
 test("a gateway that loses the port race cannot detach the running one", () => {
   const source = readFileSync(fileURLToPath(new URL("../src_v2/server/gateway.ts", import.meta.url)), "utf8");
 

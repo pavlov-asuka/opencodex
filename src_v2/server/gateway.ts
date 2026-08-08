@@ -183,6 +183,23 @@ export function buildCodexRoutingConfig(
   return nativeConfig ? `${nativeConfig}\n` : "";
 }
 
+/**
+ * Encode a value as a TOML string.
+ *
+ * A basic string treats backslash as an escape introducer, so writing a Windows
+ * path directly produced `"C:\Users\..."`, where `\U` is read as a Unicode
+ * escape and needs eight hex digits. That made the *whole* config.toml
+ * unparseable, and Codex then failed far from the cause — including a Windows
+ * sandbox setup that could never complete. Literal strings take the value
+ * verbatim, which is what a path needs; the escaped basic form is only used
+ * when the value itself contains an apostrophe.
+ */
+export function tomlString(value: string): string {
+  const text = String(value ?? "");
+  if (!text.includes("'") && !/[\n\r]/.test(text)) return `'${text}'`;
+  return `"${text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r")}"`;
+}
+
 export function buildManagedCodexConfig(
   content: string,
   port: number,
@@ -194,7 +211,7 @@ export function buildManagedCodexConfig(
   // assigns provider-owned models to opencodex at the thread/turn boundary;
   // making the gateway the global default hides native history whenever the
   // Desktop client is not yet attached to the bridge.
-  const managedTop = `# >>> opencodex managed >>>\nmodel_catalog_json = "${catalogPath}"\nmodel_provider = "openai"\n# <<< opencodex managed >>>\n`;
+  const managedTop = `# >>> opencodex managed >>>\nmodel_catalog_json = ${tomlString(catalogPath)}\nmodel_provider = "openai"\n# <<< opencodex managed >>>\n`;
   const managedProvider = `\n# >>> opencodex managed >>>\n[model_providers.opencodex]\nname = "OpenCodex"\nbase_url = "http://127.0.0.1:${port}/v1"\nwire_api = "responses"\nrequires_openai_auth = true\nexperimental_bearer_token = "${adminToken}"\nrequest_max_retries = 3\nstream_max_retries = 3\nstream_idle_timeout_ms = 600000\n# <<< opencodex managed >>>\n`;
   return `${managedTop}\n${preserved}\n${managedProvider}`;
 }
