@@ -122,6 +122,19 @@ test("a Windows catalog path does not corrupt config.toml", async () => {
   assert.equal(tomlString("C:\\it's\\odd"), '"C:\\\\it\'s\\\\odd"');
 });
 
+test("an official model is never rejected for lacking a third-party subagent route", () => {
+  const source = readFileSync(fileURLToPath(new URL("../src_v2/server/gateway.ts", import.meta.url)), "utf8");
+
+  // Codex opening a new session, or spawning a child, on an official model
+  // reaches the subagent path with nothing for the gateway to route. Failing
+  // that closed rejected legitimate official work; the native lane must win.
+  assert.match(
+    source,
+    /if \(isSubagentRequest && !subagentRoute && !nativePassthroughTurn\) \{/,
+    "the native passthrough must be honoured before rejecting a subagent turn",
+  );
+});
+
 test("third-party models are eligible as Codex subagents", async () => {
   const { buildFullCatalogEntry, multiAgentVersion } = await import("../dist/services/catalog_sync.js");
 

@@ -1103,6 +1103,34 @@ export class CodexBridgeServer {
     }
   }
 
+  /**
+   * Write one provider-bound request to disk when OPENCODEX_DEBUG_REQUEST_DUMP
+   * names a directory. Diagnostic only: it is off unless the variable is set,
+   * and it records the request as the gateway is about to forward it, which is
+   * the only place the full `input` can be compared against what the parent
+   * agent believes it sent.
+   */
+  private dumpRequestForDebug(body: any, req?: http.IncomingMessage): void {
+    const directory = String(process.env.OPENCODEX_DEBUG_REQUEST_DUMP || "").trim();
+    if (!directory) return;
+    try {
+      fs.mkdirSync(directory, { recursive: true });
+      const headers: Record<string, string> = {};
+      for (const name of ["x-openai-subagent", "x-codex-turn-metadata", "x-codex-parent-thread-id", "x-codex-request-kind"]) {
+        const value = requestHeader(req, name);
+        if (value) headers[name] = value;
+      }
+      const stamp = `${Date.now()}-${randomBytes(3).toString("hex")}`;
+      fs.writeFileSync(
+        path.join(directory, `request-${stamp}.json`),
+        JSON.stringify({ model: body?.model, headers, body }, null, 2),
+        { encoding: "utf-8", mode: 0o600 },
+      );
+    } catch (error: any) {
+      console.warn(`[OpenCodex Debug] Could not write request dump: ${error?.message || error}`);
+    }
+  }
+
   private async dispatchThirdPartySubagents(
     calls: GatewaySubagentDispatchCall[],
     context: GatewaySubagentDispatchContext,
@@ -3040,7 +3068,12 @@ if __name__ == "__main__":
               && this.isNativeCatalogModel(requestedModelBeforeRouting);
             const nativePassthroughTurn = isNativeCodexPassthrough(nativeModelRequest, isSubagentRequest);
             const subagentRoute = isSubagentRequest ? this.chooseSubagentRoute(body, req) : null;
-            if (isSubagentRequest && !subagentRoute) {
+            // Only a third-party child needs a gateway route. An official model
+            // reaching this path — Codex opening a new session or spawning a
+            // child on GPT — has nothing to route and must stay on the native
+            // lane; failing it closed here rejected legitimate official work
+            // with "No available subagent route was selected by the gateway".
+            if (isSubagentRequest && !subagentRoute && !nativePassthroughTurn) {
               res.writeHead(400, { "Content-Type": "application/json" });
               res.end(JSON.stringify({
                 error: "No available subagent route was selected by the gateway",
@@ -3103,6 +3136,11 @@ if __name__ == "__main__":
               console.log(`[OpenCodex Routing] Applied selected work model: ${body.model || "(default)"} -> ${selectedWorkRoute.model}`);
             }
             console.log(`[CodexBridge V2 DEBUG] POST /v1/responses body keys:`, Object.keys(effectiveBody), "model:", effectiveBody.model);
+            // Opt-in capture for diagnosing what actually reaches a provider.
+            // Enabled with OPENCODEX_DEBUG_REQUEST_DUMP=<directory>; each request
+            // lands in its own file so a subagent turn can be inspected without
+            // reproducing it through the UI a second time.
+            this.dumpRequestForDebug(effectiveBody, req);
             const rawRequestedModel = effectiveBody.model || "deepseek-v4-pro";
             const requestedModel = this.stripReasoningSuffix(rawRequestedModel);
             const providers = CredentialStore.loadProviders();
