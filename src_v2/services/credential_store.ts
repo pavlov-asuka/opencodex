@@ -123,6 +123,20 @@ export class CredentialStore {
     secretStore.remove(service, account);
   }
 
+  /**
+   * Drop a provider's stored credential.
+   *
+   * Removing a provider used to leave its API key behind in the OS secret
+   * store, so a deleted provider kept a live credential on disk indefinitely.
+   * Safe to call for providers that never had one.
+   */
+  public static forgetProviderSecret(provider: any): void {
+    const reference = String(provider?.credential_ref || "");
+    const prefix = `keychain:${CredentialStore.providerService}:`;
+    if (!reference.startsWith(prefix)) return;
+    CredentialStore.deleteKeychainSecret(CredentialStore.providerService, reference.slice(prefix.length));
+  }
+
   public static saveProviders(providers: ProviderConfig[]): void {
     try {
       const dir = path.dirname(CredentialStore.providersConfigPath);

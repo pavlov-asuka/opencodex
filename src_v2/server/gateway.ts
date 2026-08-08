@@ -5899,8 +5899,12 @@ if __name__ == "__main__":
             const body = await this.parseJsonBody(req);
             const providerName = body.name || body.id;
             let providers = CredentialStore.loadProviders();
+            const removedProviders = providers.filter((p: any) => p.name === providerName || p.id === providerName);
             providers = providers.filter((p: any) => p.name !== providerName && p.id !== providerName);
             CredentialStore.saveProviders(providers);
+            // Drop the credential too; otherwise a removed provider leaves a
+            // usable API key behind in the OS secret store.
+            for (const removed of removedProviders) CredentialStore.forgetProviderSecret(removed);
 
             const catalogPath = path.join(os.homedir(), ".opencodex", "custom_model_catalog.json");
             let catalog: any = { models: [] };
