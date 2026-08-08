@@ -157,6 +157,48 @@ function runningCodexProcesses(): Array<{ name: string; commandLine: string }> {
   }
 }
 
+/**
+ * Helper executables the Desktop client resolves *next to* the CLI it runs.
+ *
+ * The app derives `binDirectory` from `dirname(CODEX_CLI_PATH)` and looks for
+ * these siblings there. Pointing CODEX_CLI_PATH at the bridge therefore moves
+ * that lookup into the bridge's own directory, and without copies the Windows
+ * sandbox setup fails with "Windows 安装未完成" / "Windows installation not
+ * complete" — the app cannot find codex-windows-sandbox-setup.exe.
+ */
+const BRIDGE_SIBLING_EXECUTABLES = [
+  "codex-code-mode-host.exe",
+  "codex-windows-sandbox-setup.exe",
+  "codex-command-runner.exe",
+];
+
+/**
+ * Mirror the native CLI's helper executables next to the bridge.
+ *
+ * Copies are size-compared rather than blindly refreshed: code-mode-host alone
+ * is ~57 MB, and Desktop restarts run this on every gateway start.
+ */
+function ensureBridgeSiblingExecutables(bridge: string, nativeCodex: string): void {
+  const bridgeDir = path.dirname(bridge);
+  const nativeDir = path.dirname(nativeCodex);
+  if (!bridgeDir || !nativeDir || path.resolve(bridgeDir) === path.resolve(nativeDir)) return;
+
+  for (const name of BRIDGE_SIBLING_EXECUTABLES) {
+    const source = path.join(nativeDir, name);
+    const target = path.join(bridgeDir, name);
+    if (!isFile(source)) continue;
+    try {
+      if (isFile(target) && fs.statSync(target).size === fs.statSync(source).size) continue;
+      fs.copyFileSync(source, target);
+      console.log(`[OpenCodex Gateway] Staged Codex helper next to the bridge: ${name}`);
+    } catch (error: any) {
+      // A helper that is currently running cannot be replaced; the existing
+      // copy is the same build, so this is not fatal.
+      console.warn(`[OpenCodex Gateway] Could not stage ${name} next to the bridge: ${error?.message || error}`);
+    }
+  }
+}
+
 function broadcastEnvironmentChange(): void {
   try {
     runPowerShell(
@@ -329,6 +371,10 @@ export const win32DesktopController: DesktopController = {
       console.warn("[OpenCodex Gateway] Provider bridge startup skipped: bridge or native Codex executable is unavailable.");
       return false;
     }
+    // Desktop looks for its helper executables beside whatever CODEX_CLI_PATH
+    // names, so they have to exist next to the bridge before it is published.
+    ensureBridgeSiblingExecutables(bridge, nativeCodex);
+
     const values = bridgeEnvironmentValues(bridge, nativeCodex, port);
     try {
       for (const [name, value] of Object.entries(values)) {
