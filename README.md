@@ -1,500 +1,171 @@
-# OpenCodex
+# OpenCodex — Windows Provider Bridge
 
-### 把 Codex Desktop 变成你的本地 AI 工作台
+在 **Windows 11** 上让 Codex Desktop 同时使用官方 GPT 和第三方模型:官方模型保持原生 ChatGPT/Codex 线路,第三方模型经由 OpenCodex 网关路由。
 
-OpenCodex 是运行在本机的 Codex Desktop 控制中心：把第三方模型、模型目录、语音助手、GPT-Live、会话管理和 Agent 工具集中到一个桌面应用中，同时保留 Codex 原生模型、原生登录、Computer Use 与 MCP 的独立运行方式。
+这是 [AITabby/opencodex](https://github.com/AITabby/codexsplit)(现已更名为 CodexSplit)的一个 Fork。上游实现了 v1.2 的 provider split 架构,但**公开仓库中不包含任何 Windows 源码**,因此这套分流在 Windows 上从未真正工作。本 Fork 补上了缺失的平台层。
 
-<p align="center">
-  <a href="https://github.com/AITabby/opencodex/releases"><img src="https://img.shields.io/github/v/release/AITabby/opencodex?display_name=tag&style=flat-square&label=release" alt="Latest Release"></a>
-  <a href="https://github.com/AITabby/opencodex"><img src="https://img.shields.io/github/stars/AITabby/opencodex?style=flat-square" alt="GitHub Stars"></a>
-  <a href="https://github.com/AITabby/opencodex"><img src="https://img.shields.io/badge/macOS-source%20v1.2.0-111111?style=flat-square&logo=apple" alt="macOS source v1.2.0"></a>
-  <a href="https://github.com/AITabby/opencodex/releases/download/v1.0.8/OpenCodex-1.0.8-win-x64.exe"><img src="https://img.shields.io/badge/Windows-v1.0.8-0078D6?style=flat-square&logo=windows" alt="Windows v1.0.8"></a>
-  <a href="https://x.com/youngxxxxu"><img src="https://img.shields.io/badge/X-@youngxxxxu-000000?style=flat-square&logo=x" alt="X @youngxxxxu"></a>
-</p>
+```
+                    GPT-5.6 Sol
+                         │
+                    Codex 主 Agent
+                         │
+          ┌──────────────┼──────────────┐
+          │              │              │
+      自己执行       spawn_agent     新 Session
+          │              │              │
+          ▼              ▼              ▼
+       OpenAI      DeepSeek Flash   DeepSeek Flash
+                         │              │
+                         └──────┬───────┘
+                                ▼
+                          OpenCodex 网关
+                                ▼
+                            DeepSeek
+```
 
-<p align="center">
-  <a href="#简体中文">简体中文</a> · <a href="#english">English</a>
-</p>
+## 快速开始
 
-<p align="center">
-  <a href="https://github.com/AITabby/opencodex/releases/download/v1.2.0/OpenCodex-1.2.0-arm64.dmg">⬇️ 下载已发布的 OpenCodex v1.2.0（macOS）</a>
-  ·
-  <a href="https://github.com/AITabby/opencodex/releases/download/v1.0.8/OpenCodex-1.0.8-win-x64.exe">🪟 下载 Windows v1.0.8</a>
-  ·
-  <a href="https://github.com/AITabby/opencodex/releases/tag/v1.2.0">查看 Release</a>
-  ·
-  <a href="https://x.com/youngxxxxu">🐦 @youngxxxxu</a>
-</p>
+1. 从 [Releases](https://github.com/pavlov-asuka/opencodex/releases/latest) 下载 `OpenCodex-1.2.0-win-x64.zip`,解压到任意位置
+2. 双击 **`OpenCodex.exe`** —— 它会启动网关并打开控制台 `http://127.0.0.1:8765`
+3. 在控制台配置服务商(API Key + 模型)并应用
+4. 重启 Codex Desktop,第三方模型即出现在模型选择器中
 
-<p align="center">
-  <img src="./assets/dashboard-home.png" alt="OpenCodex 控制中心" width="960">
-</p>
+**不需要安装 Node.js** —— 启动器会回落到 Codex 自带的运行时。
 
-## 产品截图
+### 开机自启
 
-### 第三方模型配置与协议选择
+```
+schtasks /Create /TN "OpenCodex Gateway" /TR "\"%CD%\OpenCodex.exe\" --background" /SC ONLOGON /RL LIMITED /F
+```
 
-<p align="center">
-  <img src="./assets/screenshots/01-provider-model-config.png" alt="配置第三方模型并选择 Chat 或 Responses 协议" width="960">
-</p>
+建议配置。`CODEX_CLI_PATH` 持久化在 `HKCU\Environment` 中,所以重启后 Codex Desktop 无论网关是否运行都会拉起 provider bridge;网关不在时 bridge 无处可路由,第三方模型会失败。
 
-### 语音栏与 GPT-Live 执行模型选择
+取消:`schtasks /Delete /TN "OpenCodex Gateway" /F`
 
-<p align="center">
-  <img src="./assets/screenshots/02-voice-gpt-live.png" alt="语音栏设置与 GPT-Live 执行模型选择" width="960">
-</p>
+## 相比上游修复了什么
 
-### 扫描并导入本机 Agent 会话
-
-<p align="center">
-  <img src="./assets/screenshots/03-agent-session-scan.png" alt="本机 Agent 会话扫描结果" width="960">
-</p>
-
-### 按服务商管理待应用模型
-
-<p align="center">
-  <img src="./assets/screenshots/04-model-catalog.png" alt="第三方模型目录与服务商命名空间" width="960">
-</p>
-
-### Agent 路由与模型能力目录
-
-<p align="center">
-  <img src="./assets/screenshots/05-agent-routing.png" alt="Agent 路由与模型能力目录" width="960">
-</p>
-
-> 当前发布版本：macOS Apple Silicon `v1.2.0`（`spawn_agent` 子会话先进入 8765 网关，再由网关按模型/Profile 分流）；Windows 为 `v1.0.8`。Linux 版本尚未发布。
->
-> `v1.1.2` 在 `v1.1.1` 基础上统一了官方 GPT 与第三方模型的原生 `gpt-image-2` 生图路径，并保留 `gpt-image-1.5` 作为明确兜底；同时 GPT-Live 只在用户主动开启时启动。
->
-> `v1.1.5` 增加了原生 Codex app-server provider bridge：官方 GPT 由 Codex 原生 OpenAI provider 直连，第三方模型继续通过 `127.0.0.1:8765` 网关；切换 provider 时复用同一个 thread 和 rollout，不改写原生 turn 请求。源码开机项和打包版控制中心会在网关就绪后自动通过 bridge 启动 Desktop；已经独立运行的 Desktop 会在这次接管时重启一次以继承 bridge。bridge 或网关不可用时不启动不安全的第三方路由，只保证原生 GPT 直连。
->
-> `v1.2.0` 增加了 `spawn_agent` 子会话的网关分流边界：网关拥有的 dispatcher 和 native 子会话的外层 bridge 都把子任务送入 `127.0.0.1:8765/v1/responses`，由网关统一执行模型/Profile 路由；native app-server、主会话和原生 provider 路径保持不变。当前已知限制：部分 Desktop 工作树卡片的推理档位显示可能仍为默认“轻度”，不影响网关实际按 Profile 选择的执行档位。
->
-> ✅ macOS Release DMG 已内置独立 Node.js 运行时。下载安装后即可运行网关，不需要额外安装 Node.js、npm 或 Homebrew。
->
-> ⚠️ 当前 macOS DMG 未经过 Apple Developer 签名与公证。首次打开时，如果 macOS 阻止运行，请在“系统设置 → 隐私与安全性”中允许打开。
-
-## 简体中文
-
-### OpenCodex 是什么？
-
-OpenCodex 不替换 Codex Desktop，也不会把官方模型强行改走第三方接口。它在 Codex 旁边提供一个本地网关和控制中心：
-
-- 官方 Codex 模型继续走 Codex 原生路径。
-- 只有用户明确添加或导入的第三方模型才进入 OpenCodex 网关。
-- 每个服务商和模型都有独立身份，避免同名模型互相覆盖。
-- 网关只监听本机回环地址，并为管理接口提供本地授权保护。
-
-### 功能总览
-
-| 模块 | 功能 |
+| 问题 | 说明 |
 | --- | --- |
-| 🌐 本地网关 | 管理服务商、API Key、模型、协议和本机订阅，并把已启用模型接入 Codex Desktop |
-| 🧠 动态模型目录 | 自动读取模型推理档位、上下文窗口、协议和其他能力元数据 |
-| 🔌 多协议路由 | 支持 OpenAI Responses、OpenAI Chat Completions，以及 Anthropic、Google、DeepSeek、MiniMax 等适配路径 |
-| 🎙️ 语音助手 | STT、TTS、VAD、语音系统提示、全局语音栏和可视化 HUD |
-| 🤖 GPT-Live | 进行实时语音沟通，并可随时把任务安排给任意已接入模型执行；支持随时切换执行模型 |
-| 🖥️ Computer Use | 让第三方模型使用 Codex 原生桌面操作执行器，支持截图结果和工具续接 |
-| 💬 会话中心 | 浏览本地 Codex 会话、查看可见上下文、删除会话、扫描并导入外部 Agent 会话 |
-| 🧰 Agent / MCP | 保留 Codex 原生 MCP 与工具能力，并兼容第三方模型的工具调用和连续执行 |
-| 🧭 Agent 路由 | 按模型能力说明和默认推理强度自动分配子任务，也支持强制指定模型或关闭路由 |
-| 🛡️ 原生保护 | 一键重启应用模型，或一键恢复原生 Codex，不破坏官方模型路径 |
-| 📋 日志与诊断 | 查看网关实时日志、服务商连接状态、模型测试状态和启动状态 |
+| **Provider bridge 在 Windows 完全缺失** | 整个 Desktop 生命周期层(注册环境、发现、进程管理、启动)都是 macOS 专用;bridge launcher 是 POSIX `sh` 脚本,Windows 无法执行 |
+| **`config.toml` 被损坏** | 目录路径写进了 TOML **基本字符串**,`C:\Users\...` 中的 `\U` 是非法 Unicode 转义,导致整个配置文件解析失败 —— 影响远超 OpenCodex 本身 |
+| **无法保存 API Key** | `storeProviderSecret()` 在非 macOS 平台直接抛错,且 `saveProviders()` 会剥离 `api_key`,没有任何退路 |
+| **Windows 沙箱设置失败** | Codex 按 `dirname(CODEX_CLI_PATH)` 解析三个辅助程序,bridge 目录里没有它们 |
+| **第三方模型无法作为子代理** | Codex 用模型目录中的 `multi_agent_version` 决定 `spawn_agent` 资格,上游从不写这个字段 |
+| **官方模型在子代理路径被误拒** | 已算出的 `nativePassthroughTurn` 未被采纳,官方模型新建 Session 会返回 400 |
+| **网关生命周期竞争** | 抢端口失败的实例会清除健康实例的环境变量,导致 Desktop 静默退回原生 |
+| **删除服务商残留密钥** | 密钥留在系统密钥库中,且配置里已无引用可清理 |
 
-## 详细功能
+其中 TOML 转义修复与 Windows 无关的部分已向上游提交:[AITabby/codexsplit#37](https://github.com/AITabby/codexsplit/pull/37)。
 
-### 1. 服务商与第三方模型管理
+## 工作原理
 
-OpenCodex 控制中心提供常用服务商预设，也允许手动添加 OpenAI Compatible 服务：
+Codex Desktop 在 Windows 上是 MSIX 全信任应用(`OpenAI.Codex`)。它解析 app-server 时**优先读取 `CODEX_CLI_PATH`**,只校验文件存在,然后用 `child_process.spawn` **无 shell** 启动 —— 所以接管点必须是真正的 PE 可执行文件,`.cmd` 和 shebang 脚本都会被拒绝。
 
-- 常用预设：DeepSeek、Qwen、Z.ai、MiniMax、Kimi。
-- 更多预设：OpenRouter、OpenCode Go、SiliconFlow、火山方舟。
-- 自定义 OpenAI Compatible：填写 Endpoint / Base URL、API Key 和模型名称。
-- 一个服务商可以配置多个模型，支持逐个测试、删除和重新测试。
-- 每个模型可以单独选择 `Chat` 或 `Responses` 协议。
-- 支持模型显示名与实际后端模型名分离，例如 `我的模型=backend-model-id`。
-- 服务商命名空间会自动生成，例如 `deepseek/model-name`、`opencode/model-name`，避免不同服务商的同名模型冲突。
-- 模型先进入“待应用模型”列表；测试通过后，重启 Codex 才会写入 Desktop 的模型菜单。
-- 支持批量选择和删除已添加模型。
+```
+ChatGPT Desktop (MSIX)
+        │  读 CODEX_CLI_PATH  ← HKCU\Environment + WM_SETTINGCHANGE 广播
+        ▼
+codex-provider-bridge.exe        Rust,零依赖,~200KB
+        │  继承 stdio / 透传 argv / job object 防孤儿进程
+        ▼
+codex-provider-bridge.js
+        ├── 官方 GPT  →  原生 codex.exe        (保持 ChatGPT 订阅线路)
+        └── 第三方    →  网关 :8765  →  DeepSeek
+```
 
-### 2. 模型推理档位自动识别
+与 macOS 的关键差异:
 
-模型的推理档位不是按某个厂商硬编码，而是按模型实际能力生成：
+| | macOS | Windows |
+| --- | --- | --- |
+| 会话级环境变量 | `launchctl setenv` | `HKCU\Environment` + `WM_SETTINGCHANGE` |
+| 应用发现 | `.app` bundle + PlistBuddy | MSIX 包查询(`Get-AppxPackage`) |
+| 启动方式 | `open -a` | shell 激活(保住 package identity) |
+| 进程管理 | `killall` / `pgrep` | `taskkill` / `Win32_Process` |
+| 凭据存储 | Keychain | DPAPI(CurrentUser 作用域) |
 
-- 如果厂商接口返回了推理档位，就使用该模型自己的档位列表。
-- 如果模型注册表返回了明确档位，也会按注册表显示。
-- 已返回的窄档位不会被强行补成其他档位；模型只有两档或四档时，就显示两档或四档。
-- 如果模型没有返回可枚举的推理档位，只保留“自动”，不会猜测或发送固定档位。
-- 如果服务商明确声明模型不支持推理，则不显示推理档位。
-- 模型的默认档位会从该模型实际支持的列表中选择，不会发送不存在的档位。
+Session 路由、`spawn_agent` 分流、同一会话内逐 turn 切换模型等能力由上游的 `codex-provider-bridge.ts` 提供,本身是平台中立的 —— 它们只是在 Windows 上从未被启动过。
 
-### 3. 上下文窗口自动识别
+## 配置
 
-上下文长度按模型单独保存和使用：
+`opencodex.env` 与可执行文件同目录,启动时读取,每行一条 `KEY=VALUE`:
 
-1. 优先使用厂商 `/models` 或其他实时接口明确返回的上下文窗口。
-2. 没有实时返回时，使用模型注册表提供的上下文窗口。
-3. 两者都没有时，使用 `200K` 作为保守兜底值。
-4. 已经由厂商接口确认过的窗口不会被不明确的注册表数据覆盖。
-5. 原生 Codex 模型继续使用 Codex 自己的上下文限制，不由第三方目录覆盖。
+| 变量 | 默认 | 作用 |
+| --- | --- | --- |
+| `OPENCODEX_AGENT_MESSAGE_ORACLE` | 关闭 | 恢复加密的子代理任务载荷(见下) |
+| `OPENCODEX_AGENT_MESSAGE_ORACLE_MODEL` | `gpt-5.6-sol` | 用于提取的模型 |
+| `OPENCODEX_AGENT_MESSAGE_ORACLE_TIMEOUT_MS` | `60000` | 提取超时 |
+| `OPENCODEX_PORT` | `8765` | 网关端口 |
+| `OPENCODEX_WINDOWS_LAUNCH_MODE` | `shell` | `direct` 绕过 shell 激活启动 Desktop |
+| `OPENCODEX_MULTI_AGENT_VERSION` | `v2` | 写入模型目录的多 Agent 协议版本 |
+| `OPENCODEX_DEBUG_REQUEST_DUMP` | 关闭 | 记录发往服务商请求的目录(诊断用) |
 
-因此，不同第三方模型可以拥有不同的上下文长度；切换模型时，目录元数据也会跟着模型切换。
+## 已知限制
 
-### 4. 本机订阅导入
+**子代理任务载荷是加密的。** Codex 多 Agent v2 把子代理的任务放在 `agent_message` 的 `encrypted_content` 中,那是给 ChatGPT 后端解密的 Fernet token,第三方模型收到的是一段读不懂的密文,因而报告"没有收到任务"。这是上游问题,不是路由缺陷:
 
-在 macOS 上，OpenCodex 可以检测和导入部分本机桌面/CLI 登录态，并实时获取服务商可用模型：
+- [openai/codex#32031](https://github.com/openai/codex/issues/32031) —— 上游跟踪
+- [lidge-jun/opencodex#92](https://github.com/lidge-jun/opencodex/issues/92) —— 同一问题的详细分析,至今开放
 
-- **Antigravity**：读取本机 OAuth 登录态，并动态获取模型目录。
-- **Grok**：读取 Grok CLI 登录态、刷新令牌并获取模型目录。
-- **Claude**：读取 Claude Desktop 新版加密 OAuth 缓存，同时兼容旧缓存、Claude Code 登录态和 OAuth 刷新/交换。
-- **Cursor**：读取本机 Cursor 登录态、刷新令牌，并通过 Cursor AgentService 获取模型。
+`OPENCODEX_AGENT_MESSAGE_ORACLE=1` 提供了一条恢复路径(技术方案由 [@Joseffb](https://github.com/Joseffb) 在 [lidge-jun/opencodex#92](https://github.com/lidge-jun/opencodex/issues/92) 中公开):把信封用**你自己的 Codex 凭据**发回 ChatGPT,配合一次强制函数调用,由后端解密自己的密文并把明文作为函数参数返回,再转成标准输入交给第三方模型。**代价是每个不同任务多一次 ChatGPT 请求**,且依赖未公开的内部格式 —— 上游改动格式即会失效。关闭时该轮次会明确失败(`unreadable_encrypted_agent_task`),而不是让子代理拿着空任务运行。
 
-订阅导入不会只凭“检测到登录文件”就自动添加模型，而是需要用户点击导入，并以服务商实时返回的模型为准。导入后仍可以测试、删除或重新导入。
+**其他:**
 
-### 5. 网关路由与协议兼容
+- 这是**便携目录,不是安装程序**。上游的 Windows 安装外壳未公开,无法从源码复现。
+- 只在 Windows 11 + 新版统一 ChatGPT Desktop(MSIX 包 `OpenAI.Codex`)上验证过。
+- `deepseek-v4-pro` 目前会被 DeepSeek 服务端拒绝(提示 Codex 集成尚未开放),与本项目无关。
+- macOS 路径行为保持不变,但本 Fork 未在 macOS 上回归测试。
 
-OpenCodex 网关会根据模型目录中的服务商、后端模型名和协议进行明确路由：
+## 从源码构建
 
-- 原生 Codex Responses 请求继续转发到官方 Codex 后端。
-- 第三方模型可以使用 OpenAI Responses 或 Chat Completions。
-- Anthropic Messages、Google Gemini、DeepSeek、MiniMax 等有对应的请求/响应适配器。
-- 支持流式输出、推理内容、工具调用、工具结果和多轮续接。
-- 第三方 Responses 不支持某项能力时，可以按协议安全回退到 Chat 路径。
-- 支持请求体解压、流式背压、上游瞬时网络错误重试和响应头安全转发。
-- 原生 GPT 的上下文压缩完全透传；第三方 Responses 模型仅在原生支持 `/responses/compact` 时转发并转换后端模型名，不生成网关自定义压缩结果。
-
-#### v1.1.5 provider 分流与原生会话
-
-- 官方 GPT、o-series 和 Codex 模型由原生 Codex app-server 使用 OpenAI provider 直连，不经过第三方适配器。
-- 第三方模型仍使用 OpenCodex 网关的 `8765` 端口，继续沿用各服务商自己的协议、上下文、工具和压缩能力。
-- Codex Desktop 的 `turn/start` 不携带 provider，bridge 会在 provider 边界卸载并重新加载同一个 thread，然后原样转发 turn；会话 ID、rollout 路径和登录态仍由原生 Codex 管理。
-- 从 OpenCodex 的“重启 Codex”入口启动 Desktop 才会注入 bridge。手动启动的旧进程不会自动获得这层分流；此时只保证原生 GPT 直连，第三方模型需重新从 OpenCodex 启动 Desktop。
-
-### 6. Computer Use、图像和 MCP
-
-第三方模型的 Computer Use 不会伪造一套独立的桌面执行器，而是接入 Codex 的实际工具执行链：
-
-- 第三方模型可以请求桌面操作，再由 Codex 原生执行器执行。
-- 支持屏幕截图、鼠标、键盘和工具结果的连续交互。
-- 针对不同供应商对图片大小、格式和工具结果的限制，网关会做兼容处理。
-- 原生 Codex Computer Use 和 MCP 不会因为启用第三方模型而被删除或替换。
-- 支持原生图像生成桥接，图像请求和普通聊天模型路由保持分离。
-- Cursor AgentService 支持工具调用、外部工具结果和连续会话续接。
-
-### 7. GPT-Live 与实时通信
-
-GPT-Live 用于实时语音沟通和任务安排：
-
-- 进行 Live 对话时，可以随时把当前任务安排给任意已接入且可用的模型执行。
-- 执行模型可以是官方模型，也可以是已经启用并测试通过的第三方模型；不需要固定使用 Live 当前的对话模型。
-- 独立的 GPT-Live 模型选择悬浮球不依赖 OpenCodexBar。
-- 支持在一次任务的连续续接过程中保持正确的模型绑定。
-- 原生 Realtime / WebRTC 通信保留独立路径，第三方网关路由不会覆盖原生 Live。
-
-### 8. Agent 路由与模型能力目录
-
-Agent 路由让主 Agent 根据每个模型的实际工作说明分配子任务：
-
-- 在“模型能力目录”中，为已接入模型填写擅长领域 / 工作说明，选择该模型支持的默认推理强度，并决定是否参与自动分配。
-- 自动分配只使用用户保存的模型说明，不根据模型名称猜测能力；主 Agent 会根据任务难度决定是否拆分，以及使用 0、1 还是多个子 Agent。
-- 支持“自动分配”“强制选择”和“关闭路由”三种模式；强制模式下，每个子任务使用指定模型。
-- 能力说明和路由规则独立于模型导入目录，重新导入模型不会覆盖已保存的配置。
-
-### 9. 语音助手与 OpenCodexBar
-
-语音页包含完整的输入、输出和会话设置：
-
-#### 语音识别 STT
-
-- 本地 Whisper：填写 `base`、`small`、`turbo` 或本地模型文件路径，不需要 API Key。
-- OpenAI Compatible / Groq API：填写 API Key、Base URL 和转写模型。
-
-#### 语音合成 TTS
-
-- Edge TTS。
-- 火山引擎 / 豆包 TTS，可配置 AppID、Resource ID / Cluster、模型和发音人。
-- MiniMax TTS。
-- 小米 MiMo TTS。
-- OpenAI Compatible TTS API。
-
-#### 会话和体验
-
-- 短按切换持续监听，或使用长按说话、松手提交。
-- 配置语音使用的模型和语音系统提示。
-- 配置 VAD 静音阈值、结束等待时间和 HUD 动效主题。
-- 通过 OpenCodexBar 提供全局语音栏、麦克风录音、状态胶囊和语音播放。
-- 支持重启 Codex、等待 CDP 就绪并启动语音助手。
-- 提供 `/visualizer` 动效实验室，可预览和切换语音 HUD 主题。
-
-### 10. 会话中心与 Agent 导入
-
-会话中心可以浏览 Codex 本地会话，并查看完整的可见对话内容：
-
-- 会话列表、标题、模型、工作目录、时间和消息数量。
-- 查看用户消息、助手消息和会话中的可见图片。
-- 不展示隐藏推理内容，避免把内部记录当作普通对话显示。
-- 删除本地会话。
-- 支持直接导入 JSON、JSONL、SQLite、SQLite3、DB、Markdown 和 Markdown 文件。
-
-“扫描本机 Agent”可以发现并选择导入：
-
-- Antigravity Agent
-- Cursor Agent
-- Grok CLI Agent
-- Claude Code CLI
-- Hermes Agent
-
-导入后会把会话转换为 Codex 可识别的 rollout，并注册到 Codex 会话数据库，使它出现在 Desktop 侧边栏中。
-
-### 11. 应用、安全与还原
-
-- 网关默认只监听 `127.0.0.1`，不直接暴露到局域网。
-- 管理接口使用本地 admin cookie / bearer 授权。
-- 控制中心不会把 API Key 明文返回到前端；已保存的 Key 使用掩码显示。
-- macOS 上的服务商 Key 使用 Keychain 保存，配置文件只保存引用和非敏感元数据。
-- 网关日志会记录连接、导入、测试和重启状态，但不应包含完整令牌。
-- “重启 Codex”会把待应用模型写入 Desktop 模型目录并重启相关进程。
-- “恢复原生 Codex”会移除第三方模型选择、模型目录和托管配置，但保留服务商身份、Endpoint 和 Key，且不修改原生 Computer Use / MCP。
-- 网关包含单实例锁和父进程退出清理，避免重复启动多个网关进程。
-
-## 使用方式
-
-### macOS 普通用户
-
-1. 先安装并登录 Codex Desktop。
-2. 下载 [OpenCodex-1.2.0-arm64.dmg](https://github.com/AITabby/opencodex/releases/download/v1.2.0/OpenCodex-1.2.0-arm64.dmg)。
-3. 打开 DMG，把 `OpenCodex.app` 拖入 `Applications`。
-4. 启动 OpenCodex，进入“网关”配置 API Key 或导入本机订阅。
-5. 保存模型后，在“待应用模型”中测试连接。
-6. 测试通过后点击“重启 Codex（应用模型菜单）”，让模型出现在 Codex Desktop。
-
-DMG 已包含网关所需的独立 Node.js 和语音运行时。普通用户不需要额外安装 Node.js、npm、Homebrew 或 .NET SDK。
-
-### Windows 10/11
-
-当前 Windows 发布版本为 `v1.0.8`：
-
-1. 安装 Codex Desktop。
-2. 下载 [OpenCodex-1.0.8-win-x64.exe](https://github.com/AITabby/opencodex/releases/download/v1.0.8/OpenCodex-1.0.8-win-x64.exe)。
-3. 运行安装程序并启动 OpenCodex。
-
-Windows 版本以对应安装包实际提供的功能为准；当前 macOS 原生订阅导入、OpenCodexBar 和部分 CDP 集成依赖 macOS 桌面环境。
-
-### 从源码运行网关
-
-需要 Node.js 和 npm：
+需要 Node.js 20+、npm,以及 [Rust](https://rustup.rs)(用于两个可执行文件):
 
 ```bash
-git clone https://github.com/AITabby/opencodex.git
-cd opencodex
 npm install
-npm run build
-npm start
+npm run build:windows      # 编译网关 + bridge shim + 启动器
+npm run package:windows    # 生成 build/OpenCodex-win-x64 和 zip
 ```
-
-启动后访问：
-
-```text
-http://127.0.0.1:8765/dashboard
-```
-
-如果要构建 macOS 桌面应用和内置语音伴侣，需要 macOS、Swift 工具链以及项目脚本要求的语音运行时：
 
 ```bash
-npm run build:all
-./macos-app/scripts/package-dmg.sh
+npm test                   # 全量测试
 ```
 
-DMG 产物位于：
+当前:**209 通过 / 1 失败**。唯一失败项是 `session_projection` 中一条基于源码文本的断言,因 Windows 以 CRLF 检出而失效 —— 在上游同样失败,与本 Fork 改动无关。作为对照,上游 v1.2.0 在 Windows 上是 180 通过 / 10 失败。
 
-```text
-macos-app/build/OpenCodex-<version>-arm64.dmg
-```
+### 主要新增文件
 
-### 测试
+| 路径 | 作用 |
+| --- | --- |
+| `src_v2/platform/win32.ts` | Windows Desktop 控制器 |
+| `src_v2/platform/darwin.ts` | macOS 逻辑(自 gateway.ts 原样迁出) |
+| `src_v2/platform/secrets.ts` | DPAPI 凭据存储 |
+| `src_v2/services/agent_message_oracle.ts` | 子代理加密载荷恢复 |
+| `native/windows-bridge-launcher/` | Rust bridge shim |
+| `native/windows-launcher/` | Rust 应用启动器(`OpenCodex.exe`) |
+| `scripts/build.mjs` | 跨平台构建(替换 POSIX-only 的构建链) |
+| `scripts/package-windows.mjs` | Windows 打包 |
 
-```bash
-npm test
-```
+## 致谢
 
-测试覆盖模型目录、推理档位、上下文窗口、服务商命名空间、Responses / Chat 转换、Computer Use、MCP、会话导入、语音控制、Realtime 代理、凭据保护、发布包契约和 macOS 打包契约等功能。
+- [AITabby/codexsplit](https://github.com/AITabby/codexsplit) —— 上游项目与 provider split 架构
+- [lidge-jun/opencodex](https://github.com/lidge-jun/opencodex) —— 同领域更成熟的实现,子代理加密问题的分析来源
+- [@Joseffb](https://github.com/Joseffb/codex-deepseek-shim) —— 加密载荷恢复方案
 
-## 工作方式
+## License
 
-```text
-Codex Desktop
-  ├─ 官方模型 / 原生 Responses
-  ├─ 原生 Computer Use / MCP
-  └─ 原生 Live / Realtime
-          │
-          ▼
-OpenCodex App
-  ├─ 本地网关与管理 API
-  ├─ 第三方模型目录与协议路由
-  ├─ 动态推理档位与上下文元数据
-  ├─ GPT-Live 模型交接
-  ├─ 语音 STT / TTS / OpenCodexBar
-  ├─ 会话浏览、扫描与导入
-  └─ 日志、重启、还原与安全控制
-          │
-          ▼
-API Key 服务商 / 本机订阅 / OpenAI Compatible 服务
-```
-
-## 项目状态
-
-OpenCodex 正在持续迭代。当前状态：
-
-- macOS Apple Silicon：`v1.2.0` DMG 与源码已发布，包含 spawn_agent 网关分流。
-- Windows 10/11：`v1.0.8`，安装包已发布。
-- Linux：暂未发布桌面安装包。
-
-建议通过 [GitHub Releases](https://github.com/AITabby/opencodex/releases) 获取最新版本，并在提交问题时附上系统版本、OpenCodex 版本、服务商、模型名称和脱敏后的网关日志。
-
-## 相关链接
-
-- [GitHub Repository](https://github.com/AITabby/opencodex)
-- [GitHub Issues](https://github.com/AITabby/opencodex/issues)
-- [Latest Release](https://github.com/AITabby/opencodex/releases/latest)
-- [Download the latest published OpenCodex v1.2.0 DMG for macOS](https://github.com/AITabby/opencodex/releases/download/v1.2.0/OpenCodex-1.2.0-arm64.dmg)
-- [Download OpenCodex v1.0.8 for Windows](https://github.com/AITabby/opencodex/releases/download/v1.0.8/OpenCodex-1.0.8-win-x64.exe)
-- [语音助手使用指南](./VOICE_GUIDE.md)
-- [测试流程](./TEST_FLOW.md)
-- [X / Twitter: @youngxxxxu](https://x.com/youngxxxxu)
+与上游一致。
 
 ---
 
 ## English
 
-### A local AI workspace for Codex Desktop
+A Windows 11 fork of [AITabby/opencodex](https://github.com/AITabby/codexsplit) (now CodexSplit) that makes the v1.2 provider split actually work: official GPT models stay on the native ChatGPT/Codex route while third-party models are routed through the OpenCodex gateway.
 
-OpenCodex is a local control center for Codex Desktop. It brings third-party models, provider management, dynamic model metadata, voice, GPT-Live, session import, Agent routing, Computer Use compatibility, and Agent tools into one desktop workflow while keeping native Codex routing separate.
+Upstream ships **no Windows source at all** — the Windows platform layer was removed before v1.0.8 and the published installers are built out of tree. This fork adds it: a Rust bridge shim (Codex spawns `CODEX_CLI_PATH` without a shell, so it must be a real PE executable), `HKCU\Environment` registration in place of `launchctl setenv`, MSIX package discovery, DPAPI credential storage, and a double-clickable launcher.
 
-Native Codex models, native login, native Computer Use, MCP, and native Live / Realtime remain on their original paths. Only models explicitly added or imported by the user are routed through the OpenCodex gateway. The v1.2.0 source build sends gateway-owned `spawn_agent` child turns to `127.0.0.1:8765`, where the selected model/Profile is routed without changing the native app-server.
+It also fixes a bug that breaks Codex for **every** Windows user regardless of this fork: the model catalog path was written into a TOML basic string, so `\U` in `C:\Users\...` made the entire `config.toml` unparseable. Submitted upstream as [#37](https://github.com/AITabby/codexsplit/pull/37).
 
-### Screenshots
+**Install:** download the zip from [Releases](https://github.com/pavlov-asuka/opencodex/releases/latest), extract, run `OpenCodex.exe`. Node.js is not required.
 
-![OpenCodex control center](./assets/dashboard-home.png)
+**Known limitation:** multi-agent v2 delivers a subagent's task inside an `encrypted_content` block readable only by the ChatGPT backend, so third-party children receive an empty task ([openai/codex#32031](https://github.com/openai/codex/issues/32031)). Set `OPENCODEX_AGENT_MESSAGE_ORACLE=1` to recover it through your own Codex credentials, at the cost of one extra ChatGPT request per task.
 
-![Provider and model configuration](./assets/screenshots/01-provider-model-config.png)
-
-![Voice and GPT-Live](./assets/screenshots/02-voice-gpt-live.png)
-
-![Agent session scanning](./assets/screenshots/03-agent-session-scan.png)
-
-![Enabled model catalog](./assets/screenshots/04-model-catalog.png)
-
-![Agent routing and model capability directory](./assets/screenshots/05-agent-routing.png)
-
-### Current releases
-
-- macOS Apple Silicon: `v1.2.0` DMG and source release with spawn_agent gateway routing.
-- Windows 10/11: `v1.0.8` installer.
-- Linux: no desktop package is published yet.
-
-The macOS DMG includes a standalone Node.js runtime and the bundled voice runtime. End users do not need Node.js, npm, Homebrew, or the .NET SDK. The current DMG is not notarized; macOS may require allowing the first launch from **System Settings → Privacy & Security**.
-
-### Feature overview
-
-#### Gateway and provider management
-
-- Presets for DeepSeek, Qwen, Z.ai, MiniMax, Kimi, OpenRouter, OpenCode Go, SiliconFlow, and Volcengine.
-- Custom OpenAI-compatible endpoints.
-- Multiple models per provider, per-model connection tests, deletion, and bulk deletion.
-- Per-model Chat or Responses protocol selection.
-- Display aliases separated from backend model IDs.
-- Stable provider namespaces such as `deepseek/model-name` and `opencode/model-name`.
-- Staged model changes that become visible in Codex Desktop after an explicit restart.
-
-#### Dynamic model capabilities
-
-- Reasoning levels come from provider metadata or the model registry when available.
-- A model-specific list is authoritative: narrow or extended lists are preserved as returned.
-- Models without returned selectable levels expose automatic reasoning only; no fixed levels are guessed.
-- Explicitly non-reasoning models expose no reasoning picker.
-- Context windows prefer live provider metadata, then the matching model-registry value, and fall back to `200K` only when neither source is available.
-- Native Codex model metadata remains independent from third-party catalog metadata.
-
-#### Local subscription imports
-
-On macOS, the dashboard can detect and import available local login states for Antigravity, Grok, Claude, and Cursor. Imports use live provider model discovery instead of blindly relying on a hardcoded model list. Claude Desktop encrypted OAuth cache, legacy caches, Claude Code credentials, Cursor credentials, and token refresh paths are handled separately.
-
-#### Routing and compatibility
-
-- OpenAI Responses and Chat Completions support.
-- Anthropic, Google Gemini, DeepSeek, MiniMax, and OpenAI-compatible adapters.
-- Streaming, reasoning, tool calls, tool results, multi-turn continuations, request decompression, bounded streaming writes, and transient upstream retries.
-- Native GPT compaction is passed through unchanged; third-party compaction is forwarded only when the provider exposes native `/responses/compact`.
-- v1.1.5 provider split: official GPT stays on the native OpenAI app-server provider, while third-party models use `127.0.0.1:8765`. The bridge switches the same native thread before forwarding the original turn, preserving the thread and rollout path. The source login agent and packaged control center automatically launch Desktop through the bridge after the gateway is ready; an already-running Desktop is restarted once during that takeover. If the bridge or gateway is unavailable, unsafe third-party routing is not launched and native GPT remains direct.
-- Native Codex Responses, native Live / Realtime, Computer Use, and MCP remain isolated from third-party routing.
-
-#### Computer Use, images, and MCP
-
-Third-party Computer Use requests are connected to the Codex-native executor rather than a fabricated gateway-only tool. Screenshot and tool-result image compatibility, multi-turn tool continuations, native image-generation bridging, and Cursor AgentService tool continuations are supported.
-
-#### GPT-Live and voice
-
-- GPT-Live can assign the current task to any connected and available official or third-party model at any time, without requiring the Live conversation model to perform the work.
-- The independent Live model picker can switch the execution model during a task and does not depend on OpenCodexBar.
-- STT: local Whisper or OpenAI-compatible / Groq transcription APIs.
-- TTS: Edge TTS, Volcengine / Doubao, MiniMax, MiMo, or OpenAI-compatible TTS APIs.
-- VAD threshold and silence duration, interaction mode, voice prompt, voice model, and HUD theme settings.
-- OpenCodexBar global voice bar, CDP restart flow, and the `/visualizer` theme lab.
-
-#### Agent routing and model capability directory
-
-- Write a capability or work description for each connected model, choose a supported default reasoning level, and decide whether it participates in automatic assignment.
-- Automatic assignment uses the descriptions saved by the user; the main Agent decides whether to split a task and how many sub-agents to use.
-- Routing supports automatic assignment, a forced model, or routing disabled. Forced mode sends each subtask to the selected model.
-- Routing rules and capability descriptions are independent from the imported model directory and survive model re-imports.
-
-#### Sessions and Agent import
-
-- Browse visible Codex messages, metadata, and session images.
-- Delete sessions.
-- Scan and import Antigravity, Cursor Agent, Grok CLI, Claude Code CLI, and Hermes Agent sessions.
-- Import JSON, JSONL, SQLite, DB, and Markdown session files and register imported rollouts in the Codex Desktop sidebar.
-
-#### Security and recovery
-
-- Loopback-only gateway with protected admin APIs.
-- Masked credentials in the dashboard and Keychain-backed provider secrets on macOS.
-- Live gateway logs and provider test state.
-- Native reset removes managed third-party model selections and catalog data while preserving provider identity, endpoints, and credentials.
-- Single-instance gateway locking and parent-process cleanup reduce duplicate gateway processes.
-
-### Installation
-
-#### macOS
-
-1. Install and sign in to Codex Desktop.
-2. Download the latest published [OpenCodex v1.2.0 DMG for Apple Silicon](https://github.com/AITabby/opencodex/releases/download/v1.2.0/OpenCodex-1.2.0-arm64.dmg).
-3. Drag `OpenCodex.app` into `Applications`.
-4. Configure a provider or import a local subscription, test the model, and restart Codex to apply it.
-
-#### Windows 10/11
-
-Download and run the [OpenCodex v1.0.8 installer](https://github.com/AITabby/opencodex/releases/download/v1.0.8/OpenCodex-1.0.8-win-x64.exe). macOS-specific local subscription, OpenCodexBar, and CDP integrations are not assumed to have full Windows parity.
-
-#### From source
-
-```bash
-git clone https://github.com/AITabby/opencodex.git
-cd opencodex
-npm install
-npm run build
-npm start
-```
-
-Open `http://127.0.0.1:8765/dashboard` after the gateway starts. For the macOS desktop app and bundled voice companion, use `npm run build:all` and `./macos-app/scripts/package-dmg.sh` on macOS.
-
-### Links
-
-- [GitHub Repository](https://github.com/AITabby/opencodex)
-- [GitHub Issues](https://github.com/AITabby/opencodex/issues)
-- [Latest Release](https://github.com/AITabby/opencodex/releases/latest)
-- [Download OpenCodex v1.2.0 for macOS](https://github.com/AITabby/opencodex/releases/download/v1.2.0/OpenCodex-1.2.0-arm64.dmg)
-- [Download OpenCodex v1.0.8 for Windows](https://github.com/AITabby/opencodex/releases/download/v1.0.8/OpenCodex-1.0.8-win-x64.exe)
-- [Voice Assistant Guide](./VOICE_GUIDE.md)
-- [Test Flow](./TEST_FLOW.md)
-- [X / Twitter: @youngxxxxu](https://x.com/youngxxxxu)
+Tests: 209 passing, 1 failing (a pre-existing CRLF assertion that also fails upstream).
