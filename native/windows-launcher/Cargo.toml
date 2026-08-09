@@ -1,0 +1,23 @@
+[package]
+name = "opencodex-launcher"
+version = "1.2.0"
+edition = "2021"
+description = "Windows launcher that starts the OpenCodex gateway and opens its dashboard"
+license = "MIT"
+publish = false
+
+# Double-clicked by the user and also used as the logon autostart entry, so it
+# must not flash a console window; see the windows_subsystem attribute in main.rs.
+[[bin]]
+name = "OpenCodex"
+path = "src/main.rs"
+
+[dependencies]
+# Intentionally none: the Windows packaging step must build offline.
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

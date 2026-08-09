@@ -21,6 +21,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawn, execFileSync } from "node:child_process";
 import { bridgeEnvironmentValues, codexConfigPath, codexHomePath, BRIDGE_ENVIRONMENT_VARIABLES } from "./paths.js";
 import { runPowerShell } from "./powershell.js";
@@ -232,13 +233,18 @@ export const win32DesktopController: DesktopController = {
   platform: "win32",
 
   providerBridgePath(): string {
+    // The shim that shipped beside this build is the authoritative one, so it
+    // is preferred over OPENCODEX_PROVIDER_BRIDGE_PATH. That variable is one
+    // the gateway itself persists into HKCU\Environment, so a previous install
+    // would otherwise keep a newly installed copy pointing back at the old
+    // location — an installed app must not depend on a development tree.
+    const alongsideBuild = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "codex-provider-bridge.exe");
     const configured = String(process.env.OPENCODEX_PROVIDER_BRIDGE_PATH || "").trim();
     const candidates = [
+      path.resolve(alongsideBuild),
       configured,
       path.join(process.cwd(), "dist", "codex-provider-bridge.exe"),
       path.join(process.cwd(), "codex-provider-bridge.exe"),
-      path.join(path.dirname(process.execPath), "codex-provider-bridge.exe"),
-      path.join(path.dirname(process.execPath), "resources", "codex-provider-bridge.exe"),
     ].filter(Boolean);
     return candidates.find(isFile) || "";
   },

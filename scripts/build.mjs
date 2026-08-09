@@ -66,21 +66,54 @@ async function stagePosixLauncher() {
  * CODEX_CLI_PATH with `child_process.spawn` and no shell, so a `.cmd` wrapper
  * would be rejected outright.
  */
+/**
+ * App launcher: the double-clickable entry point and the logon autostart
+ * target. Built alongside the bridge shim so a Windows package is complete.
+ */
+async function stageWindowsAppLauncher() {
+  const crateDir = path.join(repoRoot, "native", "windows-launcher");
+  const manifest = path.join(crateDir, "Cargo.toml");
+  if (!existsSync(manifest)) throw new Error(`missing Rust crate at ${manifest}`);
+
+  console.log("Building Windows app launcher...");
+  requireCargo();
+  run("cargo", ["build", "--release", "--manifest-path", manifest]);
+
+  const built = path.join(crateDir, "target", "release", "OpenCodex.exe");
+  if (!existsSync(built)) throw new Error(`cargo did not produce ${built}`);
+
+  const target = path.join(distDir, "OpenCodex.exe");
+  try {
+    await cp(built, target);
+  } catch (error) {
+    if (!isLockedError(error)) throw error;
+    if (await sameContents(built, target)) {
+      console.warn("  note: OpenCodex.exe is running and unchanged; kept the existing copy");
+      return;
+    }
+    throw new Error("OpenCodex.exe is running and differs from the new build. Close it and rebuild.");
+  }
+}
+
+function requireCargo() {
+  // `cargo` is a real executable on every platform, so it can be spawned
+  // without a shell; that keeps argument quoting intact for paths with spaces.
+  const probe = spawnSync("cargo", ["--version"], { stdio: "ignore" });
+  if (probe.error || probe.status !== 0) {
+    throw new Error(
+      "cargo is required to build the Windows executables. " +
+      "Install Rust (https://rustup.rs) or pass --skip-native to build the gateway only.",
+    );
+  }
+}
+
 async function stageWindowsLauncher() {
   const crateDir = path.join(repoRoot, "native", "windows-bridge-launcher");
   const manifest = path.join(crateDir, "Cargo.toml");
   if (!existsSync(manifest)) throw new Error(`missing Rust crate at ${manifest}`);
 
   console.log("Building Windows provider bridge launcher...");
-  // `cargo` is a real executable on every platform, so it can be spawned
-  // without a shell; that keeps argument quoting intact for paths with spaces.
-  const probe = spawnSync("cargo", ["--version"], { stdio: "ignore" });
-  if (probe.error || probe.status !== 0) {
-    throw new Error(
-      "cargo is required to build the Windows provider bridge launcher. " +
-      "Install Rust (https://rustup.rs) or pass --skip-native to build the gateway only.",
-    );
-  }
+  requireCargo();
   run("cargo", ["build", "--release", "--manifest-path", manifest]);
 
   const built = path.join(crateDir, "target", "release", "codex-provider-bridge.exe");
@@ -151,7 +184,10 @@ async function main() {
   await mkdir(distDir, { recursive: true });
   await splitServerEntry();
   await stagePosixLauncher();
-  if (wantsWindowsShim) await stageWindowsLauncher();
+  if (wantsWindowsShim) {
+    await stageWindowsLauncher();
+    await stageWindowsAppLauncher();
+  }
 
   console.log("");
   console.log("Build complete:");

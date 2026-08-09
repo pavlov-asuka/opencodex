@@ -76,11 +76,33 @@ Windows build of the OpenCodex gateway with provider-bridge support.
 
 ## Run
 
-Double-click \`Start-OpenCodex.cmd\`, or from a terminal:
+Double-click **\`OpenCodex.exe\`**. It starts the gateway if it is not already
+running and opens the dashboard at http://127.0.0.1:8765 . Double-clicking it
+again while the gateway is up just reopens the dashboard.
 
-    node dist\\server.js
+\`OpenCodex.exe\` resolves Node from this folder, then from the runtime the Codex
+install ships, so a system-wide Node is not required. \`Start-OpenCodex.cmd\`
+remains for running the gateway in a visible console.
 
-The dashboard is served on http://127.0.0.1:8765 .
+## Start at logon
+
+Register the launcher so the gateway is up before Codex Desktop needs it:
+
+    schtasks /Create /TN "OpenCodex Gateway" /TR "\\"%CD%\\OpenCodex.exe\\" --background" /SC ONLOGON /RL LIMITED /F
+
+\`--background\` starts the gateway without opening a browser. Remove it with:
+
+    schtasks /Delete /TN "OpenCodex Gateway" /F
+
+This matters: \`CODEX_CLI_PATH\` persists in \`HKCU\\Environment\`, so after a
+reboot Codex Desktop starts the provider bridge whether or not the gateway is
+running. Without the gateway the bridge has nothing to route to and third-party
+turns fail, so either start at logon or stop the gateway cleanly when finished.
+
+## Settings
+
+\`opencodex.env\` beside the executable is read at startup, one \`KEY=VALUE\` per
+line. See the table below.
 
 ## What the gateway does on startup
 
@@ -168,6 +190,32 @@ async function main() {
 
   await writeFile(path.join(stageDir, "Start-OpenCodex.cmd"), LAUNCHER, "utf-8");
   await writeFile(path.join(stageDir, "README.md"), README, "utf-8");
+
+  // The double-clickable entry point lives at the root of the folder; the copy
+  // under dist/ is what the build produced.
+  const appLauncher = path.join(repoRoot, "dist", "OpenCodex.exe");
+  if (!existsSync(appLauncher)) throw new Error(`missing ${appLauncher}`);
+  await cp(appLauncher, path.join(stageDir, "OpenCodex.exe"));
+
+  // Runtime settings that must survive a reboot. Kept beside the app rather
+  // than in the registry so they are easy to inspect and undo.
+  await writeFile(
+    path.join(stageDir, "opencodex.env"),
+    [
+      "# OpenCodex runtime settings, read by OpenCodex.exe at startup.",
+      "# Lines are KEY=VALUE; remove a line to fall back to the default.",
+      "",
+      "# Recover encrypted subagent task payloads through your own Codex",
+      "# credentials. Costs one extra ChatGPT request per distinct task.",
+      "# Remove this line to disable it.",
+      "OPENCODEX_AGENT_MESSAGE_ORACLE=1",
+      "",
+      "# Gateway port.",
+      "# OPENCODEX_PORT=8765",
+      "",
+    ].join("\n"),
+    "utf-8",
+  );
 
   let archive = "";
   if (wantsZip) {
