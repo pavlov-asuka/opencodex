@@ -99,6 +99,23 @@ Session 路由、`spawn_agent` 分流、同一会话内逐 turn 切换模型等�
 | `OPENCODEX_MULTI_AGENT_VERSION` | `v2` | 写入模型目录的多 Agent 协议版本 |
 | `OPENCODEX_DEBUG_REQUEST_DUMP` | 关闭 | 记录发往服务商请求的目录(诊断用) |
 
+### 固定某个模型的推理档位
+
+`~/.opencodex/providers.json` 里每个模型的 `model_metadata` 支持两个字段:
+
+| 字段 | 作用 |
+| --- | --- |
+| `default_reasoning_level` | 目录默认档位;只在请求**没带**推理档位时填补 |
+| `min_reasoning_level` | 下限;请求带了更低的档位也会被抬上来 |
+
+```json
+"model_metadata": {
+  "deepseek-v4-flash": { "default_reasoning_level": "max", "min_reasoning_level": "max" }
+}
+```
+
+第三方模型往往比官方便宜得多,而 Desktop 会把上一个模型的档位带到新模型上,只设默认值挡不住。下限只在模型自己声明支持该档位时生效,且不会把更深的档位(如 `ultra`)拉回来。改完重启网关。
+
 ## 已知限制
 
 **子代理任务载荷是加密的。** Codex 多 Agent v2 把子代理的任务放在 `agent_message` 的 `encrypted_content` 中,那是给 ChatGPT 后端解密的 Fernet token,第三方模型收到的是一段读不懂的密文,因而报告"没有收到任务"。这是上游问题,不是路由缺陷:

@@ -207,9 +207,29 @@ export type ProviderModelDescriptor = {
   supported_reasoning_levels?: Array<{ effort: string; description?: string }>;
   reasoning?: boolean;
   default_reasoning_level?: string;
+  min_reasoning_level?: string;
   metadata_source?: string;
   metadata_updated_at?: string;
 };
+
+/**
+ * Lowest effort a model may run at, when the user pinned one.
+ *
+ * `default_reasoning_level` only fills in a missing value, so a client that
+ * sends an explicit effort every turn can keep a model below the level the
+ * user configured. This field is the floor the router raises to instead.
+ */
+export function extractModelMinReasoningLevel(model: any): string | undefined {
+  if (!model || typeof model !== "object") return undefined;
+  const raw = model.min_reasoning_level
+    ?? model.minimum_reasoning_level
+    ?? model.min_reasoning_effort
+    ?? model.minReasoningEffort;
+  const value = String(typeof raw === "object" ? raw?.effort || raw?.reasoningEffort || "" : raw || "")
+    .trim()
+    .toLowerCase();
+  return value || undefined;
+}
 
 function positiveContextValue(value: unknown): number | undefined {
   const numeric = typeof value === "number" ? value : Number(value);
@@ -275,6 +295,7 @@ export function normalizeProviderModelDescriptor(value: any): ProviderModelDescr
     ...(typeof (value.default_reasoning_level ?? value.defaultReasoningEffort ?? value.defaultReasoningLevel) === "string"
       ? { default_reasoning_level: value.default_reasoning_level ?? value.defaultReasoningEffort ?? value.defaultReasoningLevel }
       : {}),
+    ...(extractModelMinReasoningLevel(value) ? { min_reasoning_level: extractModelMinReasoningLevel(value) } : {}),
   };
 }
 
@@ -474,6 +495,12 @@ export function buildFullCatalogEntry(
     image_generation_mode: "native_images",
   };
   if (defaultReasoning) entry.default_reasoning_level = defaultReasoning;
+  // A floor the model does not advertise would be rejected upstream, so it is
+  // published only when the level is actually selectable.
+  const minReasoning = extractModelMinReasoningLevel(capabilities);
+  if (minReasoning && reasoningLevels.some((level) => level.effort === minReasoning)) {
+    entry.min_reasoning_level = minReasoning;
+  }
   if (typeof capabilities?.reasoning === "boolean") entry.reasoning = capabilities.reasoning;
   return entry;
 }
@@ -887,6 +914,7 @@ export class CatalogSyncService {
         ...(levels !== undefined ? { supported_reasoning_levels: levels } : {}),
         ...(typeof model.reasoning === "boolean" ? { reasoning: model.reasoning } : {}),
         ...(model.default_reasoning_level ? { default_reasoning_level: model.default_reasoning_level } : {}),
+        ...(model.min_reasoning_level ? { min_reasoning_level: model.min_reasoning_level } : {}),
         ...(model.metadata_source ? { metadata_source: model.metadata_source } : {}),
       };
     }

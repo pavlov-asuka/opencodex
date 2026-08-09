@@ -22,6 +22,13 @@ export interface RoutingCatalogModel {
   metadata_source?: string;
   supported_reasoning_levels?: Array<{ effort: string; description?: string }>;
   default_reasoning_level?: string;
+  /**
+   * Lowest effort this model may ever be run at. Unlike the default level,
+   * which only fills in a missing value, this also raises an effort the client
+   * asked for explicitly — the way to pin a cheap third-party model to its
+   * deepest setting regardless of what the Desktop picker carries over.
+   */
+  min_reasoning_level?: string;
   reasoning?: boolean;
   available: boolean;
   catalog_source: "custom" | "native";
@@ -75,7 +82,42 @@ function lower(value: unknown): string {
   return clean(value, 400).toLowerCase();
 }
 
+/**
+ * Relative depth of the effort names Codex uses. Only values listed here can be
+ * compared; an unknown name is left untouched rather than guessed at, so a
+ * future level cannot be silently downgraded to a floor.
+ */
+const REASONING_EFFORT_RANK: Record<string, number> = {
+  none: 0,
+  minimal: 1,
+  low: 2,
+  medium: 3,
+  high: 4,
+  xhigh: 5,
+  max: 6,
+  ultra: 7,
+};
+
+/** Raise an effort to the model's floor, when the model declares one. */
+export function applyReasoningFloor(model: RoutingCatalogModel, effort?: string): string | undefined {
+  const floor = lower(model.min_reasoning_level);
+  if (!floor) return effort;
+  // Never send a level the model does not advertise: the provider would reject
+  // the turn, which is worse than running at the requested depth.
+  const supported = (model.supported_reasoning_levels || []).map((level) => lower(level.effort));
+  if (!supported.includes(floor)) return effort;
+  if (!effort) return floor;
+  const floorRank = REASONING_EFFORT_RANK[floor];
+  const currentRank = REASONING_EFFORT_RANK[lower(effort)];
+  if (floorRank === undefined || currentRank === undefined) return effort;
+  return currentRank < floorRank ? floor : effort;
+}
+
 function normalizeReasoningForModel(model: RoutingCatalogModel, requestedValue?: string, preserveExplicit = false): string | undefined {
+  return applyReasoningFloor(model, resolveReasoningForModel(model, requestedValue, preserveExplicit));
+}
+
+function resolveReasoningForModel(model: RoutingCatalogModel, requestedValue?: string, preserveExplicit = false): string | undefined {
   const declaredSupported = (model.supported_reasoning_levels || [])
     .map((level) => lower(level.effort))
     .filter(Boolean);
@@ -173,6 +215,13 @@ function modelFromEntry(entry: any, source: "custom" | "native"): RoutingCatalog
   const defaultReasoning = typeof rawDefaultReasoning === "object"
     ? clean(rawDefaultReasoning?.effort ?? rawDefaultReasoning?.reasoningEffort, 40)
     : clean(rawDefaultReasoning, 40);
+  const rawMinReasoning = entry?.min_reasoning_level
+    ?? entry?.minimum_reasoning_level
+    ?? entry?.min_reasoning_effort
+    ?? entry?.minReasoningEffort;
+  const minReasoning = typeof rawMinReasoning === "object"
+    ? lower(rawMinReasoning?.effort ?? rawMinReasoning?.reasoningEffort)
+    : lower(rawMinReasoning);
   const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
   const contextWindow = catalogContextValue(entry, ["context_window", "contextWindow", "context_length", "contextLength"]);
   const maxContextWindow = catalogContextValue(entry, ["max_context_window", "maxContextWindow", "max_context_length", "maxContextLength"]);
@@ -212,6 +261,9 @@ function modelFromEntry(entry: any, source: "custom" | "native"): RoutingCatalog
       : {}),
     supported_reasoning_levels: effectiveReasoningLevels,
     default_reasoning_level: effectiveDefaultReasoning,
+    ...(minReasoning && effectiveReasoningLevels.some((level) => level.effort.toLowerCase() === minReasoning)
+      ? { min_reasoning_level: minReasoning }
+      : {}),
     reasoning,
     available: entry?.available !== false,
     catalog_source: source,
