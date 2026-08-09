@@ -13,7 +13,13 @@ name = "OpenCodex"
 path = "src/main.rs"
 
 [dependencies]
-# Intentionally none: the Windows packaging step must build offline.
+# Intentionally none at runtime: the launcher itself has no dependencies.
+
+[target.'cfg(windows)'.build-dependencies]
+# Build-time only, and used solely to attach the icon and version metadata.
+# build.rs downgrades a failure here to a warning, so a machine without a
+# resource compiler still produces a working (if unbranded) executable.
+winresource = "0.1"
 
 [profile.release]
 opt-level = "z"
