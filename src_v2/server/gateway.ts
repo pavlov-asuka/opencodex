@@ -28,6 +28,7 @@ import { copySafeResponseHeaders, writeHttpResponseChunked, writeSseData } from 
 import { AgentProfileStore } from "../services/agent_profile_store.js";
 import { TaskRouter, extractTaskText } from "../services/task_router.js";
 import { SubagentOrchestrator } from "../services/subagent_orchestrator.js";
+import { agentMessageOracleEnabled, hasEncryptedAgentMessage, resolveEncryptedAgentMessages } from "../services/agent_message_oracle.js";
 import {
   codexConfigPath,
   desktopAppServerState,
@@ -3093,6 +3094,31 @@ if __name__ == "__main__":
               if (subagentRoute.profile_id) {
                 res.setHeader("x-opencodex-subagent-profile-id", subagentRoute.profile_id);
               }
+            }
+            // A routed child receives its task as an `agent_message` whose
+            // payload is a Fernet token only the ChatGPT backend can read, so a
+            // third-party model is handed an empty assignment and reports that
+            // it was given no task. Recover the plaintext when the oracle is
+            // enabled; otherwise fail loudly rather than run a child blind.
+            if (subagentRoute && !nativePassthroughTurn && hasEncryptedAgentMessage(body)) {
+              const accountId = requestHeader(req, "chatgpt-account-id");
+              const outcome = agentMessageOracleEnabled()
+                ? await resolveEncryptedAgentMessages(body, accountId)
+                : { encrypted: 1, resolved: 0 };
+              if (outcome.resolved < outcome.encrypted) {
+                console.warn("[OpenCodex Subagent] Child task payload is encrypted for the ChatGPT backend and could not be recovered.");
+                res.writeHead(502, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({
+                  error: {
+                    type: "unreadable_encrypted_agent_task",
+                    message: agentMessageOracleEnabled()
+                      ? "The subagent task payload could not be decrypted; the child was not started with an empty task."
+                      : "The subagent task payload is encrypted for the ChatGPT backend. Set OPENCODEX_AGENT_MESSAGE_ORACLE=1 to recover it through your own Codex credentials, or keep the child on an official model.",
+                  },
+                }));
+                return;
+              }
+              console.log(`[OpenCodex Subagent] Recovered ${outcome.resolved} encrypted child task payload(s) for ${subagentRoute.model}.`);
             }
             // Native GPT turns are transport-only even while the gateway is
             // active. The one deliberate exception is a native child turn:
