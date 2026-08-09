@@ -230,11 +230,34 @@ export type OracleOutcome = {
 };
 
 /**
- * Replace unreadable agent-message payloads in `body.input` with plaintext.
+ * Convert an agent_message into ordinary Responses input.
  *
- * Mutates `body` in place. The envelope's own header is kept so the child still
- * sees the NEW_TASK framing; only the opaque ciphertext part is swapped for the
- * recovered assignment.
+ * `agent_message` is an OpenAI-internal item type carrying `author`/`recipient`
+ * fields. A third-party Responses implementation does not model it and simply
+ * ignores the item, so a child would still see no task even after the payload
+ * is recovered. Re-express it as a normal user message and fold the routing
+ * fields into the text so the framing survives.
+ */
+export function agentMessageAsProviderInput(item: any, text: string): any {
+  const author = cleanText(item?.author);
+  const recipient = cleanText(item?.recipient);
+  const routing = author || recipient
+    ? `[agent message${author ? ` from ${author}` : ""}${recipient ? ` to ${recipient}` : ""}]\n`
+    : "";
+  return {
+    type: "message",
+    role: "user",
+    content: [{ type: "input_text", text: `${routing}${text}` }],
+  };
+}
+
+/**
+ * Make every agent_message in `body.input` readable by a third-party provider.
+ *
+ * Mutates `body` in place. Encrypted payloads are recovered through the oracle
+ * and the envelope's own header is kept so the child still sees its NEW_TASK
+ * framing; every agent_message — recovered or already plaintext — is then
+ * re-expressed as standard provider input.
  */
 export async function resolveEncryptedAgentMessages(body: any, accountId = ""): Promise<OracleOutcome> {
   const input = Array.isArray(body?.input) ? body.input : [];
@@ -242,19 +265,24 @@ export async function resolveEncryptedAgentMessages(body: any, accountId = ""): 
 
   for (let index = 0; index < input.length; index += 1) {
     const item = input[index];
-    const envelope = envelopeFromAgentMessage(item);
-    if (!envelope) continue;
-    outcome.encrypted += 1;
+    if (item?.type !== "agent_message") continue;
 
+    const envelope = envelopeFromAgentMessage(item);
+    if (!envelope) {
+      // Already plaintext: it still needs the item-type conversion.
+      const text = contentParts(item)
+        .filter((part) => part?.type === "input_text" || part?.type === "output_text")
+        .map((part) => cleanText(part.text))
+        .join("\n");
+      if (text) input[index] = agentMessageAsProviderInput(item, text);
+      continue;
+    }
+
+    outcome.encrypted += 1;
     const assignment = await resolveAgentMessageAssignment(envelope, accountId);
     if (!assignment) continue;
 
-    input[index] = {
-      ...item,
-      content: [
-        { type: "input_text", text: `${envelope.headerText}${assignment}` },
-      ],
-    };
+    input[index] = agentMessageAsProviderInput(item, `${envelope.headerText}${assignment}`);
     outcome.resolved += 1;
   }
   return outcome;

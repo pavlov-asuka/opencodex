@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  agentMessageAsProviderInput,
   agentMessageOracleEnabled,
   agentMessageOracleConfig,
   assignmentFromOracleStream,
@@ -114,4 +115,25 @@ test("the oracle model and timeout are configurable", () => {
     if (previousTimeout === undefined) delete process.env.OPENCODEX_AGENT_MESSAGE_ORACLE_TIMEOUT_MS;
     else process.env.OPENCODEX_AGENT_MESSAGE_ORACLE_TIMEOUT_MS = previousTimeout;
   }
+});
+
+test("a recovered task becomes standard provider input", () => {
+  // `agent_message` is an OpenAI-internal item type with author/recipient
+  // fields. A third-party Responses implementation does not model it and drops
+  // the item, so the child still sees no task unless it is re-expressed as an
+  // ordinary user message.
+  const converted = agentMessageAsProviderInput(
+    capturedAgentMessage,
+    "Message Type: NEW_TASK\nPayload:\nScan the repo.",
+  );
+
+  assert.equal(converted.type, "message");
+  assert.equal(converted.role, "user");
+  assert.equal(converted.content[0].type, "input_text");
+  assert.match(converted.content[0].text, /Scan the repo\./);
+  // Routing survives in the text rather than in non-standard fields.
+  assert.match(converted.content[0].text, /from \/root/);
+  assert.match(converted.content[0].text, /to \/root\/deepseek_payload_9137/);
+  assert.equal(converted.author, undefined);
+  assert.equal(converted.recipient, undefined);
 });
