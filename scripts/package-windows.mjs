@@ -94,6 +94,34 @@ The dashboard is served on http://127.0.0.1:8765 .
 Stopping the gateway removes those variables again. A Desktop instance that is
 already running keeps its bridge until it is restarted.
 
+## Third-party models as Codex subagents
+
+Codex multi-agent v2 delivers a child's task inside an \`agent_message\` whose
+payload is encrypted for the ChatGPT backend, so a third-party child receives an
+empty task (upstream: openai/codex#32031).
+
+\`OPENCODEX_AGENT_MESSAGE_ORACLE=1\` enables recovery: the envelope is replayed to
+ChatGPT over your own Codex credentials with a forced extraction call, and the
+returned plaintext is handed to the routed child as ordinary input. It is off by
+default because it spends one extra ChatGPT Responses request per distinct task
+and relies on an undocumented internal format. With it off, such a turn fails
+with \`unreadable_encrypted_agent_task\` rather than starting a child blind.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| \`OPENCODEX_AGENT_MESSAGE_ORACLE\` | off | Recover encrypted subagent tasks |
+| \`OPENCODEX_AGENT_MESSAGE_ORACLE_MODEL\` | \`gpt-5.6-sol\` | Model used for extraction |
+| \`OPENCODEX_AGENT_MESSAGE_ORACLE_TIMEOUT_MS\` | \`60000\` | Extraction timeout |
+| \`OPENCODEX_WINDOWS_LAUNCH_MODE\` | \`shell\` | \`direct\` launches Desktop bypassing shell activation |
+| \`OPENCODEX_MULTI_AGENT_VERSION\` | \`v2\` | Value advertised so models are offered to spawn_agent |
+| \`OPENCODEX_DEBUG_REQUEST_DUMP\` | off | Directory to record provider-bound requests |
+
+## Restarting after changes
+
+The bridge runs inside Codex Desktop. After upgrading this folder, restart
+Desktop as well as the gateway; restarting only the gateway leaves the previous
+bridge loaded.
+
 ## Requirements
 
 - Windows 10/11 x64
