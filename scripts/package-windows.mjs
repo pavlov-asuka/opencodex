@@ -25,6 +25,23 @@ const outputRoot = outIndex >= 0 && argv[outIndex + 1]
   : path.join(repoRoot, "build");
 const wantsZip = !argv.includes("--no-zip");
 
+/** Locate npm's JS entry point next to the running Node installation. */
+function npmCliPath() {
+  const nodeDir = path.dirname(process.execPath);
+  const candidates = [
+    path.join(nodeDir, "node_modules", "npm", "bin", "npm-cli.js"),
+    path.join(nodeDir, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+  ];
+  const found = candidates.find((candidate) => existsSync(candidate));
+  if (!found) {
+    throw new Error(
+      "could not locate npm-cli.js next to the running Node installation; " +
+      "install production dependencies manually in the staged folder",
+    );
+  }
+  return found;
+}
+
 function run(command, commandArgs, options = {}) {
   const result = spawnSync(command, commandArgs, { stdio: "inherit", cwd: repoRoot, ...options });
   if (result.error) throw result.error;
@@ -114,11 +131,12 @@ async function main() {
   );
 
   console.log("Installing production dependencies...");
-  // npm ships as npm.cmd on Windows; name it explicitly rather than enabling a
-  // shell, which would concatenate arguments instead of escaping them.
-  run(process.platform === "win32" ? "npm.cmd" : "npm", [
-    "install", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund",
-  ], { cwd: stageDir });
+  // Node refuses to spawn a .cmd without a shell, and npm is npm.cmd on
+  // Windows. Drive npm's own entry point with the current Node binary instead,
+  // which keeps argument quoting intact and needs no shell.
+  run(process.execPath, [npmCliPath(), "install", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], {
+    cwd: stageDir,
+  });
 
   await writeFile(path.join(stageDir, "Start-OpenCodex.cmd"), LAUNCHER, "utf-8");
   await writeFile(path.join(stageDir, "README.md"), README, "utf-8");
