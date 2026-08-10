@@ -55,7 +55,7 @@ node scripts/package-windows.mjs --out build/slim-verify --no-zip
 | --- | --- | --- | --- | --- |
 | **P0** | tag / 存档分支 / 删 remote / 不变量测试 / 本文档 / `slim` 分支 / 测试归属盘点 | — | — | ✅ 完成 |
 | **P1** | 删 `src/` 死代码 | 6,131(560 文件) | 零 | ✅ 完成 |
-| **P2** | 记忆源导入 + 会话浏览面板 | ~1,140 | 低 | ⬜ |
+| **P2** | 记忆源导入 + 会话浏览面板 | 1,196 | 低 | ✅ 完成 |
 | **P3** | 语音 / GPT-Live | ~7,500 | 低 | ⬜ |
 | **P4** | Antigravity / Grok / Claude 订阅导入 | ~1,800 | 低 | ⬜ |
 | **P5** | Cursor(含 `router.ts` 手术) | ~17,900 | **中高** | ⬜ |
@@ -72,12 +72,20 @@ node scripts/package-windows.mjs --out build/slim-verify --no-zip
 
 **P3 注意**:`security_contract.test.mjs` 断言 `gateway.ts` 里存在 `import("../services/visualizer.js")`,删语音时要同步改这条。
 
-### P2 · 记忆源导入 + 会话浏览面板
+### P2 · 记忆源导入 + 会话浏览面板 ✅
 
-- `gateway.ts`:`/api/memory-sources/scan`(~249)、`/api/memory-sources/import`(~553)
-- `gateway.ts`:`/api/sessions`、`/api/sessions/detail`、`/api/sessions/delete`、`/api/sessions/import`(~342)
-- `dashboard.ts`:`sessions` 视图
-- **保留** `services/session_history.ts` —— 主链路用它修复历史
+已删 1,196 行:
+
+- `gateway.ts` 六个路由处理器共 1,140 行 + 失去引用的 `extractSessionUuid`
+- `dashboard.ts`:`sessions` 视图的 HTML、三段 CSS、17 个函数、导航按钮、`openView` 分支、视图记忆白名单、事件绑定,以及残留的死 CSS 选择器
+- **保留** `services/session_history.ts` —— 主链路用它修复多轮工具调用历史
+
+测试契约随之修正(删除的功能不该再有断言):
+
+- `dashboard_contract`:删掉"保留会话导入/扫描/删除控件"整条;语言开关那条里的 MutationObserver 跳过选择器改为 `.log-row,[data-live-picker-model]`
+- `security_contract`:删掉 `execFileSync("sqlite3", [dbPath, sql]` 断言(记忆源扫描才用它),测试改名为 "voice shell calls…";`execSync` / `.exec(` 的禁止断言全部保留
+
+**dashboard 验证方法(P3/P6 复用)**:不要为了看页面去启动第二个网关 —— 那会重写 `HKCU\Environment` 里的 `CODEX_CLI_PATH`,打断正在运行的安装。改用 `getDashboardHtml()` + 一个桩 API 的临时静态服务(端口 8799),浏览器打开后确认:控制台零报错、导航项正确、逐个 `openView()` 不抛异常、无残留 DOM 节点。
 
 ### P3 · 语音 / GPT-Live
 

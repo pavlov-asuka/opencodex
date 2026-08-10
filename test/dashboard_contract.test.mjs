@@ -14,13 +14,6 @@ test("dashboard contains the complete voice configuration and one CDP launch pat
   assert.match(text, /updateVoiceRuntimeStatus/);
 });
 
-test("dashboard keeps session import, scan, and delete controls", async () => {
-  const text = await source();
-  for (const marker of ["session-import-input", "session-scan-modal", "import-scanned-sessions", "deleteActiveSession", "session-message-image"]) {
-    assert.match(text, new RegExp(marker));
-  }
-});
-
 test("dashboard keeps visible progress states for destructive and network actions", async () => {
   const text = await source();
   for (const marker of ["runButton(button,labels,task)", "测试中…", "删除中…", "保存中…", "重启中…", "refresh-logs"]) {
@@ -62,7 +55,7 @@ test("dashboard exposes a persistent Chinese-English language switch", async () 
   assert.match(text, /OpenCodex Control Center/);
   assert.match(text, /setLanguage/);
   assert.match(text, /MutationObserver/);
-  assert.match(text, /closest\('\.session-item,\.session-message,\.log-row/);
+  assert.match(text, /closest\('\.log-row,\[data-live-picker-model\]'\)/);
 });
 
 test("dashboard refreshes subscription status after every model deletion path", async () => {

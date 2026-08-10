@@ -24,11 +24,10 @@ test("provider and voice APIs never return plaintext credentials", async () => {
   assert.match(store, /posixPermissions|chmodSync/);
 });
 
-test("voice and session shell calls pass user input as arguments", async () => {
+test("voice shell calls pass user input as arguments", async () => {
   const source = await gateway();
   assert.match(source, /execFileSync\(resolveRuntimeBinary\("uvx"\), edgeArgs/);
   assert.match(source, /execFileSync\(resolveRuntimeBinary\("say"\), \["-o", tmpAiff, text\]/);
-  assert.match(source, /execFileSync\("sqlite3", \[dbPath, sql\]/);
   assert.doesNotMatch(source, /execSync\(`uvx edge-tts/);
   assert.doesNotMatch(source, /execSync\(`say -o/);
   assert.doesNotMatch(source, /execSync\(/);
