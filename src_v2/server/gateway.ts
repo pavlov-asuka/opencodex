@@ -1499,6 +1499,9 @@ export class CodexBridgeServer {
 
   private stripReasoningSuffix(modelId: string): string {
     let clean = (modelId || "").trim();
+    // These families use a level word inside the model name itself, so the
+    // picker suffix must not be stripped from them. They are ordinary
+    // API-key providers here; only their subscription import is gone.
     if (clean.includes("gemini") || clean.includes("grok") || clean.includes("antigravity")) {
       return clean;
     }
@@ -1560,16 +1563,6 @@ export class CodexBridgeServer {
     if (providerNames.length !== 1) return null;
 
     const providerName = providerNames[0];
-    const subscriptionKeys = ["antigravity", "grok", "claude", "cursor"];
-    if (subscriptionKeys.includes(providerName)) {
-      return {
-        name: providerName,
-        preset_id: providerName,
-        baseUrl: `https://subscription.${providerName}.internal`,
-        models: matches.map((entry) => String(entry.slug || entry.model || "")).filter(Boolean)
-      };
-    }
-
     return providers.find((provider) => provider.name.toLowerCase() === providerName || provider.preset_id?.toLowerCase() === providerName)
       || { name: providerName, baseUrl: "", models: matches.map((entry) => String(entry.slug || entry.model || "")).filter(Boolean) };
   }

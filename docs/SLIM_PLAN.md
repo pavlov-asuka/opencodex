@@ -59,7 +59,7 @@ node scripts/package-windows.mjs --out build/slim-verify --no-zip
 | **P3** | 语音 / GPT-Live | 8,600 | 低 | ✅ 完成 |
 | **P3.5** | 非 Windows 客户端(`mobile/` + `macos-app/`) | 4,924 | 零 | ✅ 完成 |
 | **P4** | 订阅导入(发现 / 导入 / UI 侧) | 501 | 低 | ✅ 完成 |
-| **P5** | Cursor + 订阅请求路径(`router.ts` 手术) | ~19,000 | **中高** | ⬜ |
+| **P5** | Cursor + 订阅请求路径(`router.ts` 手术) | 19,674 | **中高** | ✅ 完成 |
 | **P6** | 子代理决策层 | ~1,600 | 中 | ⬜ |
 | **P7** | 依赖瘦身、dashboard 收尾、README、重新发版 | — | 低 | ⬜ |
 
@@ -144,7 +144,20 @@ node scripts/package-windows.mjs --out build/slim-verify --no-zip
 - 依赖 `@bufbuild/protobuf` 随之出局
 - 测试:`subscription_protocol.test.mjs`(23 条,绝大多数是 Cursor 协议)
 
-**⚠️ P4 期间发现的陷阱**:`router.ts` 里 `isAntigravityModel` / `isGrokModel` / `isClaudeModel` / `isCursorModel` 四个分支**不只是订阅认证,还兼着协议适配器的选择**:
+**已完成(19,674 行)**。P4 报告里说"整块删掉会让 API Key 接入 Anthropic 失去适配器"—— **那个判断是错的**,读了 `AdapterFactory` 才发现:适配器由 `getAdapter(protocol, providerUrl)` 通用选择,判据是 `protocol === "anthropic"` 或 URL 以 `/messages` 结尾,**完全不含厂商名**;`x-api-key` 也由 `adapter.name === "anthropic" && apiKey` 这条通用分支设置。所以四个厂商分支只是订阅路径的**覆盖层**,删掉它们不影响任何 API Key 接入的 provider。唯一的行为差异:base URL 既不以 `/messages` 结尾、又不显式声明 `protocol=anthropic` 的配置,以前靠 URL 里含 "anthropic"/"claude" 被兜住,现在不再兜 —— 而那正是 `factory.ts` 注释里明确拒绝的"按厂商名硬编码"。
+
+`test/adapter_selection.test.mjs`(5 条)在动刀**之前**写好,锁住这个结论:三种协议各自选对适配器、工厂源码不含任何厂商名、Anthropic 用自己的 API Key 认证。
+
+删除清单:
+
+- `services/cursor_gen/agent_pb.ts`(15,275)、`services/cursor_protocol.ts`(2,458)、`services/subscription_auth.ts`(934)、`test/subscription_protocol.test.mjs`(470)
+- `router.ts` 从 1,740 行降到 1,147 行:四个厂商分支、Cursor 的 AgentService 请求分支与 172 行流式分支、订阅 token 刷新重试、四段厂商专属错误文案、模块级 Cursor 状态与七个 Cursor 辅助函数、`acquireCursorStreamReader`(换回 `response.body.getReader()`)
+- `gateway.ts`:`findCatalogProvider` 里为订阅厂商合成假 provider(`https://subscription.*.internal`)的分支
+- 依赖 `@bufbuild/protobuf` 出局(7 → 6)
+
+**教训 3**:顺手把 `stripReasoningSuffix` 里 `clean.includes("gemini"|"grok"|"antigravity")` 改成查目录,结果 8 条测试红,其中就有一条 slim 不变量 —— `findCatalogMatches` 会回调 `stripReasoningSuffix`。已回退。**那三个词在这里不是厂商标记,是模型名里本来就带 level 词的家族**;订阅导入没了,但用 API Key 接 Gemini / Grok 依然是正当用法。护栏起作用了。
+
+**原 P4 记录的陷阱分析(已被上面更正,保留以备查)**:`router.ts` 里 `isAntigravityModel` / `isGrokModel` / `isClaudeModel` / `isCursorModel` 四个分支**不只是订阅认证,还兼着协议适配器的选择**:
 
 ```ts
 if (isClaudeModel) {
