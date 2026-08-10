@@ -57,12 +57,13 @@ node scripts/package-windows.mjs --out build/slim-verify --no-zip
 | **P1** | 删 `src/` 死代码 | 6,131(560 文件) | 零 | ✅ 完成 |
 | **P2** | 记忆源导入 + 会话浏览面板 | 1,196 | 低 | ✅ 完成 |
 | **P3** | 语音 / GPT-Live | 8,600 | 低 | ✅ 完成 |
+| **P3.5** | 非 Windows 客户端(`mobile/` + `macos-app/`) | 4,924 | 零 | ✅ 完成 |
 | **P4** | Antigravity / Grok / Claude 订阅导入 | ~1,800 | 低 | ⬜ |
 | **P5** | Cursor(含 `router.ts` 手术) | ~17,900 | **中高** | ⬜ |
 | **P6** | 子代理决策层 | ~1,600 | 中 | ⬜ |
 | **P7** | 依赖瘦身、dashboard 收尾、README、重新发版 | — | 低 | ⬜ |
 
-预期终态:**55,651 → 约 19,000 行**,依赖 7 个减到 6 个(去掉 `@bufbuild/protobuf`),测试 219 条减到约 150 条。
+起点 **61,247 行**(P0 的真实总量;最初对外说的 55,651 少算了 `mobile/` 与 `macos-app/`,又多算了当时尚未删除的 `src/`)。P3.5 结束时 **39,960 行**,预期终态约 **19,000 行**;依赖 7 个减到 6 个(去掉 `@bufbuild/protobuf`),测试 219 条减到约 150 条。
 
 ### P1 · `src/` 死代码 ✅
 
@@ -82,7 +83,7 @@ node scripts/package-windows.mjs --out build/slim-verify --no-zip
 
 测试契约随之修正(删除的功能不该再有断言):
 
-- `dashboard_contract`:删掉"保留会话导入/扫描/删除控件"整条;语言开关那条里的 MutationObserver 跳过选择器改为 `.log-row,[data-live-picker-model]`
+- `dashboard_contract`:删掉"保留会话导入/扫描/删除控件"整条;语言开关那条里的 MutationObserver 跳过选择器改为 `.log-row`(P3 又随 Live 悬浮球一起收敛过一次)
 - `security_contract`:删掉 `execFileSync("sqlite3", [dbPath, sql]` 断言(记忆源扫描才用它),测试改名为 "voice shell calls…";`execSync` / `.exec(` 的禁止断言全部保留
 
 **dashboard 验证方法(P3/P6 复用)**:不要为了看页面去启动第二个网关 —— 那会重写 `HKCU\Environment` 里的 `CODEX_CLI_PATH`,打断正在运行的安装。改用 `getDashboardHtml()` + 一个桩 API 的临时静态服务(端口 8799),浏览器打开后确认:控制台零报错、导航项正确、逐个 `openView()` 不抛异常、无残留 DOM 节点。
@@ -105,20 +106,25 @@ node scripts/package-windows.mjs --out build/slim-verify --no-zip
 
 **教训 2**:`refreshVoiceBarStatus()` 和 Live 悬浮球的 `setInterval` 是顶层语句,删掉函数定义后 `tsc` 依然通过,但页面加载会 ReferenceError 白屏 / 持续轮询已删除的端点。**类型检查查不出来,必须看运行中的页面和网络面板。**
 
-保留:`macos-app/` 其余部分(见"待定"),`session_history.ts`。
+保留:`session_history.ts`。(`macos-app/` 其余部分当时暂留,随后在 P3.5 删除。)
 
 测试:删 `live_model_picker`、`realtime_proxy`(其中 `copyNativeRequestHeaders` 的覆盖迁到新的 `native_headers.test.mjs`)、`live_model_picker_ui_contract`;`macos_app_contract` 删 4 条语音用例保留 2 条;`security_contract`、`dashboard_contract`、`session_projection` 局部修改。
 
-## 待定:两个计划外的目录
+### P3.5 · 非 Windows 客户端 ✅
 
-原始盘点只走了 6 个根目录,漏了两个:
+原始盘点只走了 6 个根目录,漏了两个,确认后一并删除(4,924 行):
 
 | 目录 | 行数 | 说明 |
 | --- | --- | --- |
-| `mobile/` | 3,969 | iOS 应用(Xcode 工程 + Widget 扩展)与 relay。**不被构建引用**,`tsconfig`、`package.json`、`src_v2` 里都没有它 |
-| `macos-app/` | 955 | macOS 应用外壳与 DMG 打包。`scripts/package-app.sh` 里 44 行引用已删除的语音伴侣,现在指向不存在的路径 |
+| `mobile/` | 3,969 | iPhone 伴侣:锁屏 Live Activity 显示任务状态 + 远程看会话,经 VPS 中继出站推送。**网关侧那一半根本不在本仓库** —— README 要求网关读 `OPENCODEX_RELAY_*`,但 `src_v2` 里零处 relay 代码。加上它是 Xcode 工程、还需要 VPS 与 APNs 证书,在纯 Windows 项目里三重无用 |
+| `macos-app/` | 955 | macOS 应用外壳与 DMG 打包;P3 删掉语音伴侣后其 `package-app.sh` 已指向不存在的路径 |
 
-两者都不在已批准的删除清单里,等确认后再处理。
+测试:`macos_app_contract.test.mjs` 改名为 `startup_contract.test.mjs` 并只保留 startup.sh 那条;`release_version.test.mjs` 的版本一致性断言从 `macos-app/Info.plist` 改为 `native/windows-launcher/Cargo.toml`。
+
+**仍保留的 macOS 相关物**(不在本次批准范围,需要时再决定):
+
+- `startup.sh` —— macOS launchd/pm2 开机脚本(Windows 侧的等价物是 `OpenCodex.exe` + 登录任务)
+- `src_v2/platform/darwin.ts` —— 平台运行时层,不是打包脚本;删它要同时改 `platform/index.ts` 的分发
 
 ### P4 · Antigravity / Grok / Claude 订阅导入
 
