@@ -61,7 +61,10 @@ node scripts/package-windows.mjs --out build/slim-verify --no-zip
 | **P4** | 订阅导入(发现 / 导入 / UI 侧) | 501 | 低 | ✅ 完成 |
 | **P5** | Cursor + 订阅请求路径(`router.ts` 手术) | 19,674 | **中高** | ✅ 完成 |
 | **P6** | 子代理决策层 | 1,366 | 中 | ✅ 完成 |
-| **P7** | 依赖瘦身、dashboard 收尾、文档 | — | 低 | ✅ 完成(发版待定) |
+| **P7** | 依赖瘦身、dashboard 收尾、文档 | — | 低 | ✅ 完成 |
+| **P8** | 拆分 dashboard(纯搬运,零行为变化) | — | 低 | ✅ 完成 |
+| **P9** | 控制台重新设计 | — | 中 | ⬜ |
+| **发版** | 重新打包并发布 | — | — | ⬜ |
 
 起点 **61,247 行**(P0 的真实总量;最初对外说的 55,651 少算了 `mobile/` 与 `macos-app/`,又多算了当时尚未删除的 `src/`)。P3.5 结束时 **39,960 行**,预期终态约 **19,000 行**;依赖 7 个减到 6 个(去掉 `@bufbuild/protobuf`),测试 219 条减到约 150 条。
 
@@ -275,3 +278,24 @@ git checkout archive/upstream-features
 ```bash
 git show pre-slim:src_v2/services/cursor_protocol.ts
 ```
+
+### P8 · 拆分 dashboard ✅
+
+纯搬运,**零行为变化**。原来是一个 246 行、单行最长 8,472 字符的文件,整页装在一个模板字符串里。
+
+先立证据再动刀:`test/fixtures/dashboard.html` 存下拆分前 `getDashboardHtml()` 的完整输出(65,555 字节),`test/dashboard_snapshot.test.mjs` 断言逐字节相同,并在不一致时报出第一处分歧的字节偏移与行号。另配一条结构检查(doctype、`<script>`/`<style>` 配对、三个视图 id 都在),防止将来重新生成快照时把一个残缺页面锁进去。
+
+```
+src_v2/services/dashboard/
+  index.ts     getDashboardHtml():密钥库名称替换
+  shell.ts     文档骨架 —— 换行布局就在这一处,golden 文件钉的就是它
+  styles.ts    基础样式表
+  markup.ts    服务端渲染的结构:侧边栏、三个视图、模态框
+  app.ts       前端脚本(含注入样式与 i18n 词典)
+```
+
+拆分安全的两个前提,动手前确认过:模板里只有 2 个反引号(首尾)、**0 个 `${` 插值**,所以按行搬运就是纯文本移动。
+
+`dashboard_contract.test.mjs` 的 `source()` 改为拼接五个模块 —— 它测的是"served 页面里有什么",不是"某个文件里有什么"。
+
+**P9 会故意让 golden 文件失败**,届时在同一个 commit 里重新生成,diff 就正好是设计改动本身。

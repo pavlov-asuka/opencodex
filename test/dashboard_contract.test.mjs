@@ -2,7 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const source = () => readFile(new URL("../src_v2/services/dashboard.ts", import.meta.url), "utf8");
+// The control centre is assembled from several modules now; these contracts
+// are about what the served page contains, so read the composed source.
+const source = async () => {
+  const parts = await Promise.all(["styles", "markup", "app", "shell", "index"].map(
+    (name) => readFile(new URL(`../src_v2/services/dashboard/${name}.ts`, import.meta.url), "utf8"),
+  ));
+  return parts.join("\n");
+};
 
 test("dashboard keeps visible progress states for destructive and network actions", async () => {
   const text = await source();

@@ -1831,7 +1831,7 @@ export class CodexBridgeServer {
 
         // Native OpenAI Realtime / Audio / Voice transparent HTTP proxy
         if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/dashboard")) {
-          const { getDashboardHtml } = await import("../services/dashboard.js");
+          const { getDashboardHtml } = await import("../services/dashboard/index.js");
           this.issueAdminCookie(res);
           res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
           res.end(getDashboardHtml());
