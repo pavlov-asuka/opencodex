@@ -54,7 +54,7 @@ node scripts/package-windows.mjs --out build/slim-verify --no-zip
 | 期 | 内容 | 约行数 | 风险 | 状态 |
 | --- | --- | --- | --- | --- |
 | **P0** | tag / 存档分支 / 删 remote / 不变量测试 / 本文档 / `slim` 分支 / 测试归属盘点 | — | — | ✅ 完成 |
-| **P1** | 删 `src/` 死代码 | 6,690 | 零 | ⬜ |
+| **P1** | 删 `src/` 死代码 | 6,131(560 文件) | 零 | ✅ 完成 |
 | **P2** | 记忆源导入 + 会话浏览面板 | ~1,140 | 低 | ⬜ |
 | **P3** | 语音 / GPT-Live | ~7,500 | 低 | ⬜ |
 | **P4** | Antigravity / Grok / Claude 订阅导入 | ~1,800 | 低 | ⬜ |
@@ -64,12 +64,13 @@ node scripts/package-windows.mjs --out build/slim-verify --no-zip
 
 预期终态:**55,651 → 约 19,000 行**,依赖 7 个减到 6 个(去掉 `@bufbuild/protobuf`),测试 219 条减到约 150 条。
 
-### P1 · `src/` 死代码
+### P1 · `src/` 死代码 ✅
 
-`tsconfig.json` 只包含 `src_v2/**/*`,且全仓库无一处 import `src/`。
+`tsconfig.json` 只包含 `src_v2/**/*`,且全仓库无一处 import `src/`。已删除 560 个文件 / 6,131 行:`src/codex-client/**`(ts-rs 生成的 Codex 协议类型)与 `src/cu/**`。
 
-- `src/codex-client/**`(6,367 行,ts-rs 生成的 Codex 协议类型)
-- `src/cu/**`(323 行)
+删除后 `tsc --noEmit` 干净,219 用例结果不变(218 通过),打包成功。
+
+**P3 注意**:`security_contract.test.mjs` 断言 `gateway.ts` 里存在 `import("../services/visualizer.js")`,删语音时要同步改这条。
 
 ### P2 · 记忆源导入 + 会话浏览面板
 
