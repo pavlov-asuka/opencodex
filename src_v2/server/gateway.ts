@@ -21,8 +21,7 @@ import { ProviderConfig } from "../core/types.js";
 import { isNativeResponsesReasoningId } from "../core/responses_safety.js";
 import { closeUpstreamDispatcher, fetchUpstream, upstreamErrorDetails } from "../services/upstream_fetch.js";
 import { copySafeResponseHeaders, writeHttpResponseChunked, writeSseData } from "../services/http_stream.js";
-import { AgentProfileStore } from "../services/agent_profile_store.js";
-import { TaskRouter, extractTaskText } from "../services/task_router.js";
+import { TaskRouter } from "../services/task_router.js";
 import { SubagentOrchestrator } from "../services/subagent_orchestrator.js";
 import { agentMessageOracleEnabled, hasEncryptedAgentMessage, resolveEncryptedAgentMessages } from "../services/agent_message_oracle.js";
 import {
@@ -787,7 +786,6 @@ export class CodexBridgeServer {
   private readonly dataDir: string;
   private readonly desktopRestartMarkerPath: string;
   private readonly adminToken: string;
-  private readonly agentProfileStore: AgentProfileStore;
   private readonly taskRouter: TaskRouter;
   private readonly subagentOrchestrator: SubagentOrchestrator;
   private subagentRouteBindings = new Map<string, SubagentRouteBinding>();
@@ -797,38 +795,10 @@ export class CodexBridgeServer {
     this.dataDir = process.env.OPENCODEX_DATA_DIR || path.join(os.homedir(), ".opencodex");
     this.desktopRestartMarkerPath = path.join(this.dataDir, "restart_desktop_after_gateway_ready");
     this.adminToken = this.loadOrCreateAdminToken();
-    this.agentProfileStore = new AgentProfileStore(this.dataDir);
-    this.taskRouter = new TaskRouter(this.agentProfileStore);
+    this.taskRouter = new TaskRouter(this.dataDir);
     this.subagentOrchestrator = new SubagentOrchestrator(this.dataDir);
     this.router.setSubagentDispatcher((calls, context) => this.dispatchThirdPartySubagents(calls, context));
     this.config.providers = CredentialStore.loadProviders();
-  }
-
-  /**
-   * Execute a third-party main model's gateway-owned spawn_agent calls.
-   * Native Codex normally owns this loop, but a third-party provider cannot
-   * call the desktop's private tool executor. The gateway therefore starts a
-   * real child Responses turn locally and returns its text as the tool result
-   * for the parent provider continuation.
-   */
-  private findSubagentProfileForModel(modelValue: string): any | undefined {
-    const requested = this.stripReasoningSuffix(String(modelValue || "").trim()).toLowerCase();
-    if (!requested) return undefined;
-    const normalizedRequested = requested.replace(/^opencode-go\//i, "opencode/");
-    const catalogModel = this.taskRouter.listModels().find((model) =>
-      model.slug.toLowerCase() === requested || model.backend_model.toLowerCase() === requested,
-    );
-    return this.taskRouter.listProfiles().find((profile: any) => {
-      if (!profile?.enabled || !profile?.subagent_enabled || !profile.model_ref) return false;
-      const ref = profile.model_ref;
-      const catalogSlug = String(ref.catalog_slug || "").trim().toLowerCase();
-      const profileName = String(profile.name || "").trim().toLowerCase();
-      if (catalogSlug && (catalogSlug === requested || catalogSlug.replace(/^opencode-go\//i, "opencode/") === normalizedRequested)) return true;
-      if (profileName && (profileName === requested || profileName.replace(/^opencode-go\//i, "opencode/") === normalizedRequested)) return true;
-      if (!catalogModel) return false;
-      return String(ref.backend_model || "").trim().toLowerCase() === catalogModel.backend_model.toLowerCase()
-        && String(ref.provider || "").trim().toLowerCase() === catalogModel.provider.toLowerCase();
-    });
   }
 
   private resolveSubagentWorkspacePath(rawValue: unknown): string {
@@ -1260,27 +1230,6 @@ export class CodexBridgeServer {
       (!bodyModelIsNative ? bodyModel : "") ||
       "",
     ).trim();
-    const configuredProfiles = this.taskRouter.listProfiles();
-    const requestedProfileId = String(
-      body?.agent_profile_id ||
-      body?.profile_id ||
-      body?.subagent_profile_id ||
-      body?.child_profile_id ||
-      metadata.agent_profile_id ||
-      metadata.agentProfileId ||
-      metadata.profile_id ||
-      metadata.subagent_profile_id ||
-      metadata.child_profile_id ||
-      "",
-    ).trim();
-    const explicitProfile = requestedProfileId
-      ? configuredProfiles.find((profile: any) => profile.id === requestedProfileId)
-      : undefined;
-    const modelProfile = explicitModel ? this.findSubagentProfileForModel(explicitModel) : undefined;
-    // A model selected in the Web directory carries its own durable Profile.
-    // Bind that Profile here as well as in the gateway-owned spawn_agent path,
-    // so a parent-generated reasoning value cannot override its configuration.
-    const boundProfile = explicitProfile || modelProfile;
     const now = Date.now();
     for (const [bindingId, binding] of this.subagentRouteBindings) {
       if (binding.expiresAt <= now) this.subagentRouteBindings.delete(bindingId);
@@ -1294,13 +1243,9 @@ export class CodexBridgeServer {
     ).trim();
     if (existingBinding && (!explicitModel || explicitModel.toLowerCase() === existingBinding.route.model.toLowerCase())) {
       existingBinding.expiresAt = now + SUBAGENT_ROUTE_BINDING_TTL_MS;
-      const bindingProfile = existingBinding.route.profile_id
-        ? configuredProfiles.find((profile: any) => profile.id === existingBinding.route.profile_id)
-        : undefined;
-      const profileReasoning = boundProfile?.reasoning_effort || bindingProfile?.reasoning_effort;
-      const reasoning = profileReasoning || (explicitReasoning
+      const reasoning = explicitReasoning
         ? this.taskRouter.normalizeReasoningEffort(existingBinding.route.model, explicitReasoning, true) || existingBinding.route.reasoning_effort
-        : existingBinding.route.reasoning_effort);
+        : existingBinding.route.reasoning_effort;
       existingBinding.route = {
         ...existingBinding.route,
         ...(reasoning ? { reasoning_effort: reasoning } : {}),
@@ -1308,27 +1253,17 @@ export class CodexBridgeServer {
       console.log(`[OpenCodex Subagent] Reusing child route: ${existingBinding.route.model}${existingBinding.route.reasoning_effort ? ` reasoning=${existingBinding.route.reasoning_effort}` : ""}`);
       return existingBinding.route;
     }
-    const routeRequest = {
-      source: "subagent" as const,
-      task_id: taskId,
-      task_text: extractTaskText(body),
-      task_type: body?.task_type || metadata.task_type || metadata.taskType || "",
-      tags: Array.isArray(body?.tags) ? body.tags : (Array.isArray(metadata.tags) ? metadata.tags : []),
-      profile_id: boundProfile?.id || requestedProfileId,
-      forced_model: boundProfile ? "" : explicitModel,
-      reasoning_effort: boundProfile?.reasoning_effort || explicitReasoning,
-      preserve_reasoning_effort: Boolean(!boundProfile && explicitReasoning),
-      required_tools: Array.isArray(body?.required_tools) ? body.required_tools : (Array.isArray(metadata.required_tools) ? metadata.required_tools : []),
-      permission: body?.permission || metadata.permission || "",
-    };
-    const route = this.taskRouter.resolve(routeRequest);
-    if (!route.ok || !route.model) {
-      console.warn(`[OpenCodex Subagent] Routing did not select a model: ${route.reason}`);
+    // The child model is whatever the parent named. There is no policy layer
+    // left to override it; the only reason to refuse is that the local catalog
+    // does not have the model, in which case running something else silently
+    // would be worse than failing.
+    const route = this.taskRouter.resolveModel(explicitModel, explicitReasoning, true);
+    if (!route) {
+      console.warn(`[OpenCodex Subagent] Child model is not available in the local catalog: ${explicitModel || "(none named)"}`);
       return null;
     }
-    this.taskRouter.record(routeRequest, route);
     const task = this.subagentOrchestrator.start({
-      task_id: routeRequest.task_id,
+      task_id: taskId,
       parent_task_id:
         metadata.parent_task_id ||
         metadata.parentThreadId ||
@@ -1338,14 +1273,13 @@ export class CodexBridgeServer {
         headerMetadata.parent_thread_id ||
         headerMetadata.parent_task_id ||
         requestHeader(req, "x-codex-parent-thread-id"),
-      profile_id: route.profile_id,
       provider: route.provider,
       model: route.model,
       backend_model: route.backend_model,
       reasoning_effort: route.reasoning_effort,
     });
-    console.log(`[OpenCodex Subagent] Routed child task: ${route.model}${route.reasoning_effort ? ` reasoning=${route.reasoning_effort}` : ""} (${route.reason})`);
-    const selectedRoute = { model: route.model, reasoning_effort: route.reasoning_effort, profile_id: route.profile_id, reason: route.reason, task_id: task.id };
+    console.log(`[OpenCodex Subagent] Routed child task: ${route.model}${route.reasoning_effort ? ` reasoning=${route.reasoning_effort}` : ""} (explicit child model)`);
+    const selectedRoute = { model: route.model, reasoning_effort: route.reasoning_effort, reason: "explicit child model", task_id: task.id };
     if (taskId !== "__active__") {
       this.subagentRouteBindings.set(taskId, { expiresAt: now + SUBAGENT_ROUTE_BINDING_TTL_MS, route: selectedRoute });
       while (this.subagentRouteBindings.size > MAX_SUBAGENT_ROUTE_BINDINGS) {
@@ -2132,104 +2066,6 @@ export class CodexBridgeServer {
         // 1.1.0 Agent Profile and routing APIs. Profiles are user-owned
         // policy data; the imported model catalog remains a separate derived
         // inventory and is never rewritten by these endpoints.
-        if (req.method === "GET" && url.pathname === "/api/agent-routing/catalog") {
-          res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-          res.end(JSON.stringify({ models: this.taskRouter.listModels() }));
-          return;
-        }
-
-        if (req.method === "GET" && url.pathname === "/api/agent-profiles") {
-          const profiles = this.taskRouter.listProfiles();
-          const models = this.taskRouter.listModels();
-          const availability = new Map(models.map((model) => [`${model.provider}|${model.backend_model}`.toLowerCase(), model]));
-          const enriched = profiles.map((profile) => {
-            const ref = profile.model_ref;
-            const model = ref
-              ? models.find((candidate) =>
-                (ref.catalog_slug && candidate.slug === ref.catalog_slug) ||
-                (candidate.provider === ref.provider.toLowerCase() && candidate.backend_model === ref.backend_model)
-              )
-              : undefined;
-            return { ...profile, model_available: Boolean(model?.available), catalog_model: model || null };
-          });
-          res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-          res.end(JSON.stringify({ profiles: enriched, models, routing: this.taskRouter.getSettings(), availability_count: availability.size }));
-          return;
-        }
-
-        if (req.method === "POST" && url.pathname === "/api/agent-profiles") {
-          try {
-            const body = await this.parseJsonBody(req);
-            const profile = this.agentProfileStore.upsertProfile(body);
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ profile }));
-          } catch (err: any) {
-            res.writeHead(400, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: err.message }));
-          }
-          return;
-        }
-
-        const profilePathMatch = url.pathname.match(/^\/api\/agent-profiles\/([^/]+)$/);
-        if (profilePathMatch && req.method === "PUT") {
-          try {
-            const body = await this.parseJsonBody(req);
-            const profile = this.agentProfileStore.upsertProfile({ ...body, id: decodeURIComponent(profilePathMatch[1]) });
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ profile }));
-          } catch (err: any) {
-            res.writeHead(400, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: err.message }));
-          }
-          return;
-        }
-
-        if (profilePathMatch && req.method === "DELETE") {
-          const deleted = this.agentProfileStore.deleteProfile(decodeURIComponent(profilePathMatch[1]));
-          res.writeHead(deleted ? 200 : 404, { "Content-Type": "application/json" });
-          res.end(JSON.stringify(deleted ? { ok: true } : { error: "Agent Profile 不存在" }));
-          return;
-        }
-
-        if (req.method === "GET" && url.pathname === "/api/agent-routing/settings") {
-          res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-          res.end(JSON.stringify(this.taskRouter.getSettings()));
-          return;
-        }
-
-        if ((req.method === "POST" || req.method === "PUT") && url.pathname === "/api/agent-routing/settings") {
-          try {
-            const body = await this.parseJsonBody(req);
-            const settings = this.agentProfileStore.saveRoutingSettings(body);
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify(settings));
-          } catch (err: any) {
-            res.writeHead(400, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: err.message }));
-          }
-          return;
-        }
-
-        if (req.method === "POST" && url.pathname === "/api/agent-routing/preview") {
-          try {
-            const body = await this.parseJsonBody(req);
-            const route = this.taskRouter.resolve(body || {});
-            res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-            res.end(JSON.stringify({ route }));
-          } catch (err: any) {
-            res.writeHead(400, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: err.message }));
-          }
-          return;
-        }
-
-        if (req.method === "GET" && url.pathname === "/api/agent-routing/events") {
-          const limit = Number(url.searchParams.get("limit") || 100);
-          res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-          res.end(JSON.stringify({ events: this.agentProfileStore.readRouteEvents(limit) }));
-          return;
-        }
-
         if (req.method === "GET" && url.pathname === "/api/agent-tasks") {
           const limit = Number(url.searchParams.get("limit") || 100);
           res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });

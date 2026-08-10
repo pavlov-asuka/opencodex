@@ -60,7 +60,7 @@ node scripts/package-windows.mjs --out build/slim-verify --no-zip
 | **P3.5** | 非 Windows 客户端(`mobile/` + `macos-app/`) | 4,924 | 零 | ✅ 完成 |
 | **P4** | 订阅导入(发现 / 导入 / UI 侧) | 501 | 低 | ✅ 完成 |
 | **P5** | Cursor + 订阅请求路径(`router.ts` 手术) | 19,674 | **中高** | ✅ 完成 |
-| **P6** | 子代理决策层 | ~1,600 | 中 | ⬜ |
+| **P6** | 子代理决策层 | 1,366 | 中 | ✅ 完成 |
 | **P7** | 依赖瘦身、dashboard 收尾、README、重新发版 | — | 低 | ⬜ |
 
 起点 **61,247 行**(P0 的真实总量;最初对外说的 55,651 少算了 `mobile/` 与 `macos-app/`,又多算了当时尚未删除的 `src/`)。P3.5 结束时 **39,960 行**,预期终态约 **19,000 行**;依赖 7 个减到 6 个(去掉 `@bufbuild/protobuf`),测试 219 条减到约 150 条。
@@ -179,13 +179,19 @@ if (isClaudeModel) {
 
 **做法**:先删 cursor 专属函数与模块级状态,再摘 `handleResponses` 里的调用点,分两个 commit,每步跑不变量测试。动刀前重读本文档的不变量一节。
 
-### P6 · 子代理决策层
+### P6 · 子代理决策层 ✅
 
-- `services/agent_profile_store.ts`(267)
-- `services/task_router.ts`:**只删 `route()` / `matchingProfileScore` / `resolveProfile` 一套**。`readRoutingCatalog`、`modelFromEntry`、`normalizeReasoningEffort`、`applyReasoningFloor`、`extractTaskText` 是主链路,必须保留
-- `gateway.ts`:`/api/agent-profiles`、`/api/agent-routing/*`(~117)、`findSubagentProfileForModel`;`chooseSubagentRoute` 中**只删 Profile 匹配分支,保留 `explicit forced model` 分支**
-- `dashboard.ts`:`agent-routing` 视图
-- 测试:`agent_routing.test.mjs` 20 条里 **8 条决策层可删、12 条是核心必须保留**;`agent_routing_api.test.mjs` 整体可删
+已删 1,366 行。子代理现在只有一条入口:**父代理点名模型**。
+
+- `services/agent_profile_store.ts`(267)整体删除
+- `services/task_router.ts` 589 → 339 行:删掉 `resolve()` / `matchingProfileScore` / `resolveProfile` / `resolveProfileDirect` / `unavailable` / `record` / `listProfiles` / `getSettings`、`TaskRouteRequest` / `ResolvedTaskRoute` 类型,以及失去调用者的 `capabilityTokens` / `list` / `extractTaskText`。新增一个窄接口 `resolveModel(model, effort, preserveExplicit)`:查目录、判可用、归一化档位,**没有任何策略**
+- 构造函数从 `new TaskRouter(store)` 改为 `new TaskRouter(dataDir)`
+- `gateway.ts`:`/api/agent-profiles` 与 `/api/agent-routing/*` 六个路由(98)、`findSubagentProfileForModel`(27);`chooseSubagentRoute` 里 Profile 相关的 40 行(`configuredProfiles` / `requestedProfileId` / `explicitProfile` / `modelProfile` / `boundProfile` / `bindingProfile`)
+- `dashboard.ts` 246 → 149 行:`agent-routing` 视图整块
+
+**保留**:`subagent_orchestrator`(任务台账与可观测性)、绑定复用(按 `child_thread_id` 记住这个子代理是谁)、档位归一化与下限。
+
+测试:`agent_routing.test.mjs`(20 条)按盘点拆分 —— 8 条决策层用例作废,**12 条核心迁进新的 `subagent_routing.test.mjs`** 并改写为显式点名模型的形式,另加 6 条新用例覆盖:目录里没有的模型必须拒绝而不是静默换一个、同一父代理的并发子代理按 `thread_id` 各自路由、prewarm 不建任务、以及一条**反向断言**确保 `TaskRouter` 不再暴露 `resolve` / `listProfiles` / `getSettings` / `record`。`agent_routing_api.test.mjs` 与 `dashboard_contract` 里的"模型能力目录"契约整体删除。
 
 ### P7 · 收尾
 

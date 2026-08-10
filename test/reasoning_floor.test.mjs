@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs/promises";
-import { AgentProfileStore } from "../dist/services/agent_profile_store.js";
 import { TaskRouter, applyReasoningFloor, readRoutingCatalog } from "../dist/services/task_router.js";
 import { buildFullCatalogEntry } from "../dist/services/catalog_sync.js";
 
@@ -96,7 +95,7 @@ test("1.2.0 raises an effort below the floor and leaves deeper ones alone", asyn
 
 test("1.2.0 applies the floor to an explicitly selected per-turn effort", async () => {
   await withCatalog(async ({ dataDir }) => {
-    const router = new TaskRouter(new AgentProfileStore(dataDir));
+    const router = new TaskRouter(dataDir);
     // This is the call the gateway makes on the provider request path, where
     // `preserveExplicit` keeps a picker selection verbatim. A pinned model must
     // still be raised, otherwise the floor is bypassed on every real turn.

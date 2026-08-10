@@ -1,13 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import {
-  AgentProfile,
-  AgentProfileStore,
-  AgentRouteEvent,
-  AgentRoutingMode,
-  AgentTaskSource,
-} from "./agent_profile_store.js";
 
 export interface RoutingCatalogModel {
   slug: string;
@@ -34,48 +27,11 @@ export interface RoutingCatalogModel {
   catalog_source: "custom" | "native";
 }
 
-export interface TaskRouteRequest {
-  source: AgentTaskSource;
-  task_id?: string;
-  task_text?: string;
-  task_type?: string;
-  tags?: string[];
-  profile_id?: string;
-  forced_model?: string;
-  reasoning_effort?: string;
-  /** Keep an explicitly selected per-turn effort verbatim at the provider boundary. */
-  preserve_reasoning_effort?: boolean;
-  required_tools?: string[];
-  permission?: string;
-}
-
-export interface ResolvedTaskRoute {
-  ok: boolean;
-  mode: AgentRoutingMode;
-  profile_id?: string;
-  profile_name?: string;
-  model?: string;
-  backend_model?: string;
-  provider?: string;
-  protocol?: string;
-  reasoning_effort?: string;
-  tools?: string[];
-  permission?: string;
-  reason: string;
-  unavailable?: boolean;
-  catalog_model?: RoutingCatalogModel;
-}
-
 export const DEFAULT_REASONING_EFFORTS = ["low", "medium", "high"] as const;
 const DEFAULT_REASONING_LEVELS = DEFAULT_REASONING_EFFORTS.map((effort) => ({ effort }));
 
 function clean(value: unknown, max = 400): string {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
-}
-
-function list(value: unknown, max = 64): string[] {
-  if (!Array.isArray(value)) return [];
-  return Array.from(new Set(value.map((item) => clean(item, 120)).filter(Boolean))).slice(0, max);
 }
 
 function lower(value: unknown): string {
@@ -144,22 +100,6 @@ function resolveReasoningForModel(model: RoutingCatalogModel, requestedValue?: s
   const declaredDefault = lower(model.default_reasoning_level);
   if (declaredDefault && supported.includes(declaredDefault)) return declaredDefault;
   return supported[0];
-}
-
-function capabilityTokens(value: unknown): string[] {
-  const parts = lower(value).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
-  const tokens: string[] = [];
-  for (const part of parts) {
-    if (/^[\u3400-\u9fff]+$/u.test(part)) {
-      tokens.push(part);
-      for (let index = 0; index + 1 < part.length; index += 1) {
-        tokens.push(part.slice(index, index + 2));
-      }
-    } else if (part.length >= 2) {
-      tokens.push(part);
-    }
-  }
-  return Array.from(new Set(tokens)).filter((token) => token.length >= 2).slice(0, 160);
 }
 
 function catalogValue(entry: any, keys: string[]): string {
@@ -324,102 +264,58 @@ export function readRoutingCatalog(
   return Array.from(result.values()).sort((a, b) => a.slug.localeCompare(b.slug));
 }
 
-export function extractTaskText(value: any): string {
-  if (typeof value === "string") return clean(value, 4000);
-  if (!value || typeof value !== "object") return "";
-  const parts: string[] = [];
-  const visit = (current: any, key = "", depth = 0): void => {
-    if (depth > 5 || current == null) return;
-    if (typeof current === "string") {
-      if (!key || /^(input|text|content|message|prompt|task|instructions|summary)$/i.test(key)) parts.push(current);
-      return;
-    }
-    if (Array.isArray(current)) {
-      for (const item of current) visit(item, key, depth + 1);
-      return;
-    }
-    if (typeof current !== "object") return;
-    for (const [childKey, childValue] of Object.entries(current)) {
-      if (/^(instructions|input|messages|text|task|prompt|message|content|client_metadata)$/i.test(childKey) || typeof childValue === "object") {
-        visit(childValue, childKey, depth + 1);
-      }
-    }
-  };
-  visit(value);
-  return Array.from(new Set(parts.map((part) => clean(part, 4000)).filter(Boolean))).slice(-8).join("\n").slice(0, 8000);
+/** What a resolved child turn needs to reach its provider. */
+export interface ResolvedModelRoute {
+  model: string;
+  backend_model: string;
+  provider: string;
+  protocol?: string;
+  reasoning_effort?: string;
+  catalog_model: RoutingCatalogModel;
 }
 
-function matchingProfileScore(profile: AgentProfile, request: TaskRouteRequest): { score: number; reason: string } {
-  let score = profile.priority;
-  const reasons: string[] = [];
-  const requestedType = lower(request.task_type);
-  const requestedTags = new Set(list(request.tags).map((item) => item.toLowerCase()));
-  const profileTypes = new Set(profile.task_types.map((item) => item.toLowerCase()));
-  const profileTags = new Set(profile.tags.map((item) => item.toLowerCase()));
-
-  if (requestedType) {
-    if (profileTypes.has(requestedType)) {
-      score += 100;
-      reasons.push(`task_type=${requestedType}`);
-    } else if (profileTags.has(requestedType)) {
-      score += 65;
-      reasons.push(`tag=${requestedType}`);
-    }
-  }
-  for (const tag of requestedTags) {
-    if (profileTypes.has(tag) || profileTags.has(tag)) {
-      score += 20;
-      reasons.push(`tag=${tag}`);
-    }
-  }
-
-  const requiredTools = list(request.required_tools).map((item) => item.toLowerCase());
-  const profileTools = new Set(profile.tools.map((item) => item.toLowerCase()));
-  if (requiredTools.length > 0) {
-    const missing = requiredTools.filter((tool) => !profileTools.has(tool));
-    if (missing.length > 0) return { score: -100000, reason: `missing_tools=${missing.join(",")}` };
-    score += requiredTools.length * 12;
-    reasons.push("required_tools");
-  }
-
-  if (request.permission && profile.permission === request.permission) {
-    score += 12;
-    reasons.push(`permission=${request.permission}`);
-  }
-
-  // When the caller cannot provide a structured task_type (the native
-  // subagent bridge often only gives us the task text), use only labels the
-  // user authored in this Profile. This is deliberately not a developer-owned
-  // keyword table and never infers a provider's capability from its name.
-  const taskTokens = capabilityTokens(request.task_text);
-  if (taskTokens.length > 0) {
-    const userLabels = capabilityTokens([profile.name, profile.description, ...profile.task_types, ...profile.tags].join(" "));
-    const matchedLabels = userLabels.filter((label) => taskTokens.includes(label));
-    if (matchedLabels.length > 0) {
-      score += Math.min(60, matchedLabels.length * 10);
-      reasons.push(`user_capabilities=${Array.from(new Set(matchedLabels)).slice(0, 6).join("|")}`);
-    }
-  }
-  return { score, reason: reasons.join(",") || "profile_priority" };
-}
-
+/**
+ * Reads the model catalog and answers two questions about a concrete model:
+ * whether it exists, and what reasoning effort it should run at.
+ *
+ * There is deliberately no policy here. Which model a turn uses is decided by
+ * the client — the Desktop picker for a main turn, the explicitly named model
+ * for a spawn_agent child.
+ */
 export class TaskRouter {
-  public readonly store: AgentProfileStore;
+  public readonly dataDir: string;
 
-  constructor(store = new AgentProfileStore()) {
-    this.store = store;
-  }
-
-  public listProfiles(): AgentProfile[] {
-    return this.store.loadProfiles();
+  constructor(dataDir = process.env.OPENCODEX_DATA_DIR || path.join(os.homedir(), ".opencodex")) {
+    this.dataDir = dataDir;
   }
 
   public listModels(): RoutingCatalogModel[] {
-    return readRoutingCatalog(this.store.dataDir);
+    return readRoutingCatalog(this.dataDir);
   }
 
-  public getSettings() {
-    return this.store.loadRoutingSettings();
+  /**
+   * Resolve an explicitly named model against the local catalog.
+   * `null` means the catalog does not have it, which is the one case where a
+   * child turn must fail rather than silently run on something else.
+   */
+  public resolveModel(modelValue: string, requestedEffort?: string, preserveExplicit = false): ResolvedModelRoute | null {
+    const requested = lower(modelValue);
+    if (!requested) return null;
+    const model = this.listModels().find((entry) =>
+      entry.slug.toLowerCase() === requested ||
+      entry.backend_model.toLowerCase() === requested ||
+      entry.display_name?.toLowerCase() === requested,
+    );
+    if (!model || !model.available) return null;
+    const reasoning = normalizeReasoningForModel(model, requestedEffort, preserveExplicit && Boolean(clean(requestedEffort, 40)));
+    return {
+      model: model.slug,
+      backend_model: model.backend_model,
+      provider: model.provider,
+      protocol: model.protocol,
+      reasoning_effort: reasoning || undefined,
+      catalog_model: model,
+    };
   }
 
   /**
@@ -440,150 +336,4 @@ export class TaskRouter {
     return normalizeReasoningForModel(model, requestedValue, preserveExplicit);
   }
 
-  public resolve(request: TaskRouteRequest): ResolvedTaskRoute {
-    const settings = this.store.loadRoutingSettings();
-    const profiles = this.store.loadProfiles();
-    const catalog = this.listModels();
-    const source = request.source || "manual";
-
-    const explicitModel = clean(request.forced_model);
-    if (explicitModel) {
-      return this.resolveModel(explicitModel, undefined, request, catalog, "explicit forced model");
-    }
-
-    const explicitProfileId = clean(request.profile_id, 80);
-    if (explicitProfileId) {
-      const profile = profiles.find((item) => item.id === explicitProfileId);
-      if (!profile) return this.unavailable(request, "requested profile is not configured");
-      if (!profile.enabled) return this.unavailable(request, `profile ${profile.id} is disabled`, profile);
-      if (request.source === "gpt-live" && !profile.live_enabled) return this.unavailable(request, `profile ${profile.id} is not enabled for GPT-Live`, profile);
-      if (request.source === "subagent" && !profile.subagent_enabled) return this.unavailable(request, `profile ${profile.id} is not enabled for subagents`, profile);
-      return this.resolveProfile(profile, request, catalog, "explicit profile", profiles);
-    }
-
-    if (settings.mode === "off") {
-      return { ok: false, mode: "off", reason: "routing is disabled" };
-    }
-
-    if (settings.mode === "forced") {
-      if (settings.forced_model) return this.resolveModel(settings.forced_model, undefined, request, catalog, "forced routing model");
-      if (settings.forced_profile_id) {
-        const profile = profiles.find((item) => item.id === settings.forced_profile_id);
-        if (!profile) return this.unavailable(request, "forced profile is not configured");
-        if (!profile.enabled) return this.unavailable(request, `forced profile ${profile.id} is disabled`, profile);
-        if (request.source === "gpt-live" && !profile.live_enabled) return this.unavailable(request, `forced profile ${profile.id} is not enabled for GPT-Live`, profile);
-        if (request.source === "subagent" && !profile.subagent_enabled) return this.unavailable(request, `forced profile ${profile.id} is not enabled for subagents`, profile);
-        return this.resolveProfile(profile, request, catalog, "forced routing profile", profiles);
-      }
-      return { ok: false, mode: "forced", reason: "forced routing is enabled but no model or profile is selected" };
-    }
-
-    const candidates = profiles
-      .filter((profile) => profile.enabled)
-      .filter((profile) => source !== "gpt-live" || profile.live_enabled)
-      .filter((profile) => source !== "subagent" || profile.subagent_enabled)
-      .map((profile) => ({ profile, ...matchingProfileScore(profile, request) }))
-      .filter((item) => item.score > -100000)
-      .sort((a, b) => b.score - a.score || a.profile.id.localeCompare(b.profile.id));
-
-    const requestedType = lower(request.task_type);
-    const matched = candidates.find((item) => item.reason.includes("user_capabilities=") || (requestedType && (item.profile.task_types.some((type) => type.toLowerCase() === requestedType) || item.profile.tags.some((tag) => tag.toLowerCase() === requestedType))));
-    const defaultProfile = settings.default_profile_id
-      ? candidates.find((item) => item.profile.id === settings.default_profile_id)
-      : undefined;
-    const selected = matched || (requestedType && settings.strict_matching ? undefined : defaultProfile || candidates[0]);
-
-    if (!selected) {
-      return this.unavailable(request, requestedType ? `no profile matched task_type=${requestedType}` : "no enabled profile is configured");
-    }
-    return this.resolveProfile(selected.profile, request, catalog, `auto: ${selected.reason}`, profiles);
-  }
-
-  public record(request: TaskRouteRequest, route: ResolvedTaskRoute, status: AgentRouteEvent["status"] = route.ok ? "resolved" : "unavailable"): AgentRouteEvent {
-    return this.store.appendRouteEvent({
-      source: request.source,
-      task_id: request.task_id,
-      profile_id: route.profile_id,
-      model: route.model,
-      backend_model: route.backend_model,
-      provider: route.provider,
-      reasoning_effort: route.reasoning_effort,
-      status,
-      reason: route.reason,
-    });
-  }
-
-  private resolveProfile(profile: AgentProfile, request: TaskRouteRequest, catalog: RoutingCatalogModel[], reason: string, profiles: AgentProfile[]): ResolvedTaskRoute {
-    const direct = this.resolveProfileDirect(profile, request, catalog, reason);
-    if (direct.ok || profile.fallback_profile_ids.length === 0) return direct;
-    for (const fallbackId of profile.fallback_profile_ids) {
-      const fallback = profiles.find((candidate) => candidate.id === fallbackId && candidate.enabled);
-      if (!fallback) continue;
-      if (request.source === "gpt-live" && !fallback.live_enabled) continue;
-      if (request.source === "subagent" && !fallback.subagent_enabled) continue;
-      const fallbackRoute = this.resolveProfileDirect(fallback, request, catalog, `${reason}; explicit fallback=${fallback.id}`);
-      if (fallbackRoute.ok) return fallbackRoute;
-    }
-    return direct;
-  }
-
-  private resolveProfileDirect(profile: AgentProfile, request: TaskRouteRequest, catalog: RoutingCatalogModel[], reason: string): ResolvedTaskRoute {
-    if (!profile.model_ref) return this.unavailable(request, `profile ${profile.id} has no model binding`, profile);
-    return this.resolveModel(profile.model_ref.catalog_slug || profile.model_ref.backend_model, profile, request, catalog, reason, profile.model_ref);
-  }
-
-  private resolveModel(modelValue: string, profile: AgentProfile | undefined, request: TaskRouteRequest, catalog: RoutingCatalogModel[], reason: string, modelRef?: { provider?: string; backend_model?: string; catalog_slug?: string }): ResolvedTaskRoute {
-    const requested = lower(modelValue);
-    const expectedProvider = lower(modelRef?.provider);
-    const expectedBackend = lower(modelRef?.backend_model);
-    const model = catalog.find((entry) => {
-      if (expectedProvider && entry.provider !== expectedProvider) return false;
-      return (modelRef?.catalog_slug && entry.slug.toLowerCase() === lower(modelRef.catalog_slug)) ||
-        (expectedBackend && entry.backend_model.toLowerCase() === expectedBackend) ||
-        (!modelRef && (entry.slug.toLowerCase() === requested || entry.backend_model.toLowerCase() === requested || entry.display_name?.toLowerCase() === requested));
-    });
-    if (!model || !model.available) {
-      return this.unavailable(request, `model ${modelValue} is not available in the local catalog`, profile);
-    }
-    const requestedReasoning = clean(request.reasoning_effort, 40);
-    const profileReasoning = profile?.reasoning_effort;
-    // A saved Web Profile is the durable model binding. Once a Profile has
-    // been selected or explicitly bound, its reasoning setting must remain
-    // authoritative across routing modes; task-level values are only a
-    // fallback for models without a bound Profile.
-    const configuredReasoning = profileReasoning || requestedReasoning;
-    const reasoning = normalizeReasoningForModel(
-      model,
-      configuredReasoning,
-      Boolean(!profileReasoning && request.preserve_reasoning_effort && requestedReasoning),
-    );
-    return {
-      ok: true,
-      mode: this.store.loadRoutingSettings().mode,
-      profile_id: profile?.id,
-      profile_name: profile?.name,
-      model: model.slug,
-      backend_model: model.backend_model,
-      provider: model.provider,
-      protocol: model.protocol,
-      reasoning_effort: reasoning || undefined,
-      tools: profile?.tools,
-      permission: profile?.permission,
-      reason,
-      catalog_model: model,
-    };
-  }
-
-  private unavailable(request: TaskRouteRequest, reason: string, profile?: AgentProfile): ResolvedTaskRoute {
-    const route: ResolvedTaskRoute = {
-      ok: false,
-      mode: this.store.loadRoutingSettings().mode,
-      profile_id: profile?.id,
-      profile_name: profile?.name,
-      reason,
-      unavailable: true,
-    };
-    this.record(request, route);
-    return route;
-  }
 }
