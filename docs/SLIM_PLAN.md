@@ -61,7 +61,7 @@ node scripts/package-windows.mjs --out build/slim-verify --no-zip
 | **P4** | 订阅导入(发现 / 导入 / UI 侧) | 501 | 低 | ✅ 完成 |
 | **P5** | Cursor + 订阅请求路径(`router.ts` 手术) | 19,674 | **中高** | ✅ 完成 |
 | **P6** | 子代理决策层 | 1,366 | 中 | ✅ 完成 |
-| **P7** | 依赖瘦身、dashboard 收尾、README、重新发版 | — | 低 | ⬜ |
+| **P7** | 依赖瘦身、dashboard 收尾、文档 | — | 低 | ✅ 完成(发版待定) |
 
 起点 **61,247 行**(P0 的真实总量;最初对外说的 55,651 少算了 `mobile/` 与 `macos-app/`,又多算了当时尚未删除的 `src/`)。P3.5 结束时 **39,960 行**,预期终态约 **19,000 行**;依赖 7 个减到 6 个(去掉 `@bufbuild/protobuf`),测试 219 条减到约 150 条。
 
@@ -193,9 +193,34 @@ if (isClaudeModel) {
 
 测试:`agent_routing.test.mjs`(20 条)按盘点拆分 —— 8 条决策层用例作废,**12 条核心迁进新的 `subagent_routing.test.mjs`** 并改写为显式点名模型的形式,另加 6 条新用例覆盖:目录里没有的模型必须拒绝而不是静默换一个、同一父代理的并发子代理按 `thread_id` 各自路由、prewarm 不建任务、以及一条**反向断言**确保 `TaskRouter` 不再暴露 `resolve` / `listProfiles` / `getSettings` / `record`。`agent_routing_api.test.mjs` 与 `dashboard_contract` 里的"模型能力目录"契约整体删除。
 
-### P7 · 收尾
+### P7 · 收尾 ✅(发版待定)
 
-依赖清理、`dashboard.ts` 导航按钮、`README.md`、`scripts/package-windows.mjs` 里的说明文本、重新打包发版。
+**依赖瘦身 —— 这一期最大的收获。** 逐个核查后发现六个运行时依赖里**四个从来没被 import 过**:
+
+| 依赖 | 体积 | 使用情况 |
+| --- | --- | --- |
+| `node-pty` | 61.4 MB | 零引用 |
+| `sql.js` | 18.2 MB | 零引用 |
+| `@modelcontextprotocol/sdk` | 4.1 MB | 零引用 |
+| `https-proxy-agent` | — | 零引用 |
+| `ws` | 0.1 MB | P3 删掉 WebSocket 服务器后失去最后一个使用者 |
+| `undici` | 1.6 MB | **在用**(`upstream_fetch.ts`) |
+
+现在运行时依赖只剩 `undici` 一个,开发依赖只剩 `typescript` 与 `@types/node`。
+
+```
+打包体积   166.1 MB / 4,538 文件  →  3.6 MB / 339 文件
+```
+
+验证方式:在**只装了 undici** 的打包目录里逐个 `import()` 全部 11 个核心模块 + bridge,确认没有任何 `ERR_MODULE_NOT_FOUND`。
+
+**dashboard**:删掉 `.subscription-*` / `.brand-antigravity|grok|claude|cursor` 等死选择器,以及 P3 漏掉的**"高级语音"卡片**(它藏在"应用与安全"视图里,带 VAD 阈值输入框)。
+
+**文档**:删除四份为已删子系统写的文档 —— `VOICE_GUIDE.md`、`SESSION_PROGRESS.md`(语音开发日志)、`TEST_FLOW.md`(pm2 / `$HOME` 的 macOS 时代流程)、`docs/PROVIDER_WORKSPACE_REDESIGN.md`(macOS Provider Workspace 设计)。`README.md` 按精简后的实际情况重写。
+
+**教训 4:翻译词典的裁剪失败并回退。** 想删掉 83 条指向已删功能的 `['中文','English']` 条目,正则合并逗号时在数组里留下了空洞,`new Map(pairs)` 抛出 `Iterator value undefined is not an entry object`,整个语言模块没初始化 —— **`tsc` 通过、5 条 dashboard 契约测试也通过**(它们只 grep 源码文本),是在浏览器里点语言开关才发现的。已整体回退。那些条目是惰性查找数据,收益纯粹是整洁度,不值得再冒一次风险。
+
+**仍保留**(需要时再定):`startup.sh`(macOS launchd 脚本,`startup_contract.test.mjs` 仍在断言它)、`src_v2/platform/darwin.ts`(运行时平台层)。
 
 ## 风险与缓解
 
