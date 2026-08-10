@@ -43,9 +43,18 @@ test("the golden file is a complete document", async () => {
   assert.match(html, /<\/html>\s*$/);
   assert.equal((html.match(/<script>/g) || []).length, (html.match(/<\/script>/g) || []).length);
   assert.equal((html.match(/<style>/g) || []).length, (html.match(/<\/style>/g) || []).length);
-  for (const view of ["view-gateway", "view-logs", "view-settings"]) {
-    assert.match(html, new RegExp(`id="${view}"`));
+  // Every id app.ts binds a handler to. A snapshot alone would happily freeze
+  // a page whose controls silently lost their wiring.
+  for (const id of [
+    "language-toggle", "restart-settings", "reset-button",
+    "api-provider-list", "enabled-models", "restart-button",
+    "refresh-logs", "log-list",
+    "provider-modal", "provider-form", "provider-key", "close-modal", "test-candidate", "toast",
+  ]) {
+    assert.match(html, new RegExp(`id="${id}"`), `missing id="${id}"`);
   }
-  assert.match(html, /id="api-provider-list"/);
-  assert.match(html, /id="enabled-models"/);
+  // The page is one document now; nothing may reintroduce view switching
+  // without updating this contract.
+  assert.doesNotMatch(html, /data-view=/);
+  assert.doesNotMatch(html, /class="view /);
 });

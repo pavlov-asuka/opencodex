@@ -299,3 +299,17 @@ src_v2/services/dashboard/
 `dashboard_contract.test.mjs` 的 `source()` 改为拼接五个模块 —— 它测的是"served 页面里有什么",不是"某个文件里有什么"。
 
 **P9 会故意让 golden 文件失败**,届时在同一个 commit 里重新生成,diff 就正好是设计改动本身。
+
+### P9 · 控制台重新设计 ✅
+
+功能只剩三件事(填 Key 加模型、看日志、重启/还原),却还架着一个为 6 个视图设计的侧边栏。改成**单页**:顶栏放品牌与两个应用级动作,下面一列滚动分区。
+
+- `markup.ts` 重写:去掉 `<aside class="sidebar">`、导航、`.side-spacer`、`.app-safety`,以及被暗色主题 `display:none` 掉的 `.shield`;三个 `.view` 变成两个 `.panel`。**app.ts 绑定的每个 id 原样保留**
+- `app.ts`:删掉 `openView`、`[data-view]` 点击绑定、`sessionStorage` 视图记忆,以及两处用 JS 替换品牌标志/文字的补丁(现在直接写在 markup 里)。日志原本在切到该视图时才加载,单页下改为随初始化一起 `loadLogs()`
+- CSS:`.app` / `.sidebar` / `.nav*` / `.side-spacer` / `.app-safety*` / `.brand` 在两个文件的 **6 处媒体查询里被重复定义**(`.app` 一个选择器就有 5 份),全部清除,新布局在 `styles.ts` 里只定义一次
+- `body{min-width:980px}` 一并去掉 —— 它存在的唯一目的是阻止旧侧边栏布局塌掉,单列不需要
+- 修掉 P4 遗留的过时文案:"尚未添加第三方模型。先保存 API Key,**或导入本机订阅**。"
+
+golden 文件在同一 commit 重新生成(59,526 → 55,371 字节),结构检查同步加强:现在断言 **app.ts 会绑定的 14 个 id 全部存在**,并反向断言页面不再出现 `data-view=` / `class="view "` —— 光有快照会愉快地冻结一个控件全部失联的页面。
+
+**教训 5:预览服务必须随构建重启。** Node 缓存 ES 模块,`dist` 重建后已经跑着的预览进程仍在服务旧代码。P9 中间有两轮"改了没效果"就是这个原因,不是 CSS 没生效。另外预览端口从 8799 换成 8791 —— 8799 是 `v2_server.test.mjs` 用的,并行时会 EADDRINUSE。
