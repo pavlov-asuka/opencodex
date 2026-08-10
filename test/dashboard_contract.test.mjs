@@ -4,16 +4,6 @@ import { readFile } from "node:fs/promises";
 
 const source = () => readFile(new URL("../src_v2/services/dashboard.ts", import.meta.url), "utf8");
 
-test("dashboard contains the complete voice configuration and one CDP launch path", async () => {
-  const text = await source();
-  for (const id of ["stt-api-key", "stt-base-url", "tts-api-key", "tts-base-url", "interaction-mode", "restart-cdp"]) {
-    assert.match(text, new RegExp(`id=\\"${id}\\"`));
-  }
-  assert.doesNotMatch(text, /launch-voice-bar/);
-  assert.match(text, /CDP 注入模式/);
-  assert.match(text, /updateVoiceRuntimeStatus/);
-});
-
 test("dashboard keeps visible progress states for destructive and network actions", async () => {
   const text = await source();
   for (const marker of ["runButton(button,labels,task)", "测试中…", "删除中…", "保存中…", "重启中…", "refresh-logs"]) {
@@ -55,7 +45,7 @@ test("dashboard exposes a persistent Chinese-English language switch", async () 
   assert.match(text, /OpenCodex Control Center/);
   assert.match(text, /setLanguage/);
   assert.match(text, /MutationObserver/);
-  assert.match(text, /closest\('\.log-row,\[data-live-picker-model\]'\)/);
+  assert.match(text, /closest\('\.log-row'\)/);
 });
 
 test("dashboard refreshes subscription status after every model deletion path", async () => {

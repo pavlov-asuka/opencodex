@@ -14,22 +14,17 @@ test("gateway is loopback-only and protects admin APIs", async () => {
   assert.doesNotMatch(source, /server\.listen\(this\.port, "0\.0\.0\.0"/);
 });
 
-test("provider and voice APIs never return plaintext credentials", async () => {
+test("provider APIs never return plaintext credentials", async () => {
   const [source, store] = await Promise.all([gateway(), credentials()]);
   assert.match(source, /const \{ api_key: _apiKey/);
   assert.match(source, /api_key_configured/);
-  assert.match(source, /maskVoiceSettings/);
   assert.match(store, /OpenCodex Provider Credential/);
   assert.match(store, /delete provider\.api_key/);
   assert.match(store, /posixPermissions|chmodSync/);
 });
 
-test("voice shell calls pass user input as arguments", async () => {
+test("the gateway never builds a shell command string", async () => {
   const source = await gateway();
-  assert.match(source, /execFileSync\(resolveRuntimeBinary\("uvx"\), edgeArgs/);
-  assert.match(source, /execFileSync\(resolveRuntimeBinary\("say"\), \["-o", tmpAiff, text\]/);
-  assert.doesNotMatch(source, /execSync\(`uvx edge-tts/);
-  assert.doesNotMatch(source, /execSync\(`say -o/);
   assert.doesNotMatch(source, /execSync\(/);
   assert.doesNotMatch(source, /\.exec\(/);
 });
@@ -40,7 +35,6 @@ test("V2 has no runtime dependency on the retired gateway tree", async () => {
   assert.doesNotMatch(source, retiredGatewayPattern);
   assert.equal(source.includes("src/proxy"), false);
   assert.equal(source.includes("dist/proxy"), false);
-  assert.match(source, /import\("\.\.\/services\/visualizer\.js"\)/);
 });
 
 test("model routing is owned by imported catalog metadata and has no provider-order fallback", async () => {

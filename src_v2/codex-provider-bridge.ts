@@ -20,7 +20,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { RequestDecompressor } from "./core/decompressor.js";
 import { copySafeResponseHeaders, writeHttpResponseChunked } from "./services/http_stream.js";
 import { fetchUpstream, upstreamErrorDetails } from "./services/upstream_fetch.js";
-import { copyNativeRequestHeaders } from "./server/webrtc_proxy.js";
+import { copyNativeRequestHeaders } from "./server/native_headers.js";
 
 export type CodexProvider = "openai" | "opencodex";
 

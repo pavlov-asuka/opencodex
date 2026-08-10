@@ -6,7 +6,6 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "build:windows": "node scripts/build.mjs --windows",
-    "build:all": "./scripts/build-all.sh",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test test/*.test.mjs",
     "start": "node dist/server.js",

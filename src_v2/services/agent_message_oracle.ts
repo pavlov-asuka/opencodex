@@ -24,7 +24,7 @@
 
 import { createHash } from "node:crypto";
 import { fetchUpstream } from "./upstream_fetch.js";
-import { readNativeAccessToken } from "../server/webrtc_proxy.js";
+import { readNativeAccessToken } from "../server/native_headers.js";
 
 const ORACLE_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
 const ORACLE_TOOL = "capture_assignment";

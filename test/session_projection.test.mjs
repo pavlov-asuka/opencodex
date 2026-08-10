@@ -20,15 +20,6 @@ test("internal Codex envelopes are not projected to third-party providers", () =
   assert.equal(result[0].content, "你好");
 });
 
-test("session detail filters compact tool traces masquerading as user text", async () => {
-  const { readFile } = await import("node:fs/promises");
-  const source = await readFile(new URL("../src_v2/server/gateway.ts", import.meta.url), "utf8");
-  assert.match(source, /isSyntheticToolTrace/);
-  assert.match(source, /toolMarkers\.length >= 3/);
-  assert.match(source, /role === "user" && isSyntheticToolTrace/);
-  assert.doesNotMatch(source, /extractTranscriptUserText\(parsed\.content\)\.slice\(0, 300\)/);
-});
-
 test("subscription imports require live provider models and explicit ownership", async () => {
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("../src_v2/server/gateway.ts", import.meta.url), "utf8");

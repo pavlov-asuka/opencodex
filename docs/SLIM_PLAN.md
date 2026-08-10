@@ -56,7 +56,7 @@ node scripts/package-windows.mjs --out build/slim-verify --no-zip
 | **P0** | tag / 存档分支 / 删 remote / 不变量测试 / 本文档 / `slim` 分支 / 测试归属盘点 | — | — | ✅ 完成 |
 | **P1** | 删 `src/` 死代码 | 6,131(560 文件) | 零 | ✅ 完成 |
 | **P2** | 记忆源导入 + 会话浏览面板 | 1,196 | 低 | ✅ 完成 |
-| **P3** | 语音 / GPT-Live | ~7,500 | 低 | ⬜ |
+| **P3** | 语音 / GPT-Live | 8,600 | 低 | ✅ 完成 |
 | **P4** | Antigravity / Grok / Claude 订阅导入 | ~1,800 | 低 | ⬜ |
 | **P5** | Cursor(含 `router.ts` 手术) | ~17,900 | **中高** | ⬜ |
 | **P6** | 子代理决策层 | ~1,600 | 中 | ⬜ |
@@ -87,13 +87,38 @@ node scripts/package-windows.mjs --out build/slim-verify --no-zip
 
 **dashboard 验证方法(P3/P6 复用)**:不要为了看页面去启动第二个网关 —— 那会重写 `HKCU\Environment` 里的 `CODEX_CLI_PATH`,打断正在运行的安装。改用 `getDashboardHtml()` + 一个桩 API 的临时静态服务(端口 8799),浏览器打开后确认:控制台零报错、导航项正确、逐个 `openView()` 不抛异常、无残留 DOM 节点。
 
-### P3 · 语音 / GPT-Live
+### P3 · 语音 / GPT-Live ✅
 
-- `voice/OpenCodexBar/**`(3,524 行 Swift,macOS 菜单栏应用)
-- `services/visualizer.ts`(1,364)、`services/live_model_picker.ts`(386)、`server/webrtc_proxy.ts`(228)
-- `gateway.ts` 五个区域:路由(~891)、live picker 方法(~135)、`chooseLiveWorkRoute` 等(~218)、`ensurePythonScripts` / `startVADDaemon` / `sendVADRequest`(~290,内嵌 MiniMax TTS 与 Silero VAD 的 Python 脚本,写 `/tmp`,在 Windows 上本就是死代码)、`transcribeAudioAPI`
-- `dashboard.ts`:`voice` 视图
-- 测试:`live_model_picker`、`realtime_proxy`、`live_model_picker_ui_contract`、`macos_app_contract`;`security_contract` 与 `dashboard_contract` 需要局部修改
+已删 8,600 行。
+
+**先做的解耦**:`webrtc_proxy.ts` 不能整删 —— `copyNativeRequestHeaders` 有三个主链路调用点,`codex-provider-bridge.ts` 和 `agent_message_oracle.ts` 也各自 import 它。先把 `readNativeAccessToken` / `isLocalOrPlaceholderBearer` / `copyNativeRequestHeaders` 搬进新的 `server/native_headers.ts`,再删原文件。
+
+删除:
+
+- `voice/OpenCodexBar/**`、`macos-app/Sources/OpenCodexLivePicker/`(Live 悬浮球)
+- `services/visualizer.ts`、`services/live_model_picker.ts`、`server/webrtc_proxy.ts`、`scripts/build-all.sh`(它只负责构建语音伴侣)与 `build:all` npm script
+- `gateway.ts` 十个区域共 2,173 行:realtime/live 代理路由、live picker 六个路由、语音六个路由 + 原生语音观察器、`ensurePythonScripts`(内嵌 MiniMax TTS 与 Silero VAD 的 Python,写 `/tmp`,Windows 上本就是死代码)、VAD 方法、`chooseLiveWorkRoute` 与 picker 方法、WebSocket 服务器、STT/TTS/CDP/MCP 尾部方法
+- `gateway.ts` 另外 131 行:P2 遗留的会话投影函数族(`projectCodexSessionMessages` 等七个函数互相引用,单看调用数看不出已死)+ Live picker 状态字段
+- `dashboard.ts`:`voice` 视图、Live 悬浮球及其 1 秒轮询
+
+**教训**:互相引用的函数族用"引用计数 > 1"判断存活会漏。要从**根**(有外部调用者的入口)往下判定。
+
+**教训 2**:`refreshVoiceBarStatus()` 和 Live 悬浮球的 `setInterval` 是顶层语句,删掉函数定义后 `tsc` 依然通过,但页面加载会 ReferenceError 白屏 / 持续轮询已删除的端点。**类型检查查不出来,必须看运行中的页面和网络面板。**
+
+保留:`macos-app/` 其余部分(见"待定"),`session_history.ts`。
+
+测试:删 `live_model_picker`、`realtime_proxy`(其中 `copyNativeRequestHeaders` 的覆盖迁到新的 `native_headers.test.mjs`)、`live_model_picker_ui_contract`;`macos_app_contract` 删 4 条语音用例保留 2 条;`security_contract`、`dashboard_contract`、`session_projection` 局部修改。
+
+## 待定:两个计划外的目录
+
+原始盘点只走了 6 个根目录,漏了两个:
+
+| 目录 | 行数 | 说明 |
+| --- | --- | --- |
+| `mobile/` | 3,969 | iOS 应用(Xcode 工程 + Widget 扩展)与 relay。**不被构建引用**,`tsconfig`、`package.json`、`src_v2` 里都没有它 |
+| `macos-app/` | 955 | macOS 应用外壳与 DMG 打包。`scripts/package-app.sh` 里 44 行引用已删除的语音伴侣,现在指向不存在的路径 |
+
+两者都不在已批准的删除清单里,等确认后再处理。
 
 ### P4 · Antigravity / Grok / Claude 订阅导入
 
