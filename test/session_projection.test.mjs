@@ -20,13 +20,3 @@ test("internal Codex envelopes are not projected to third-party providers", () =
   assert.equal(result[0].content, "你好");
 });
 
-test("subscription imports require live provider models and explicit ownership", async () => {
-  const { readFile } = await import("node:fs/promises");
-  const source = await readFile(new URL("../src_v2/server/gateway.ts", import.meta.url), "utf8");
-  assert.match(source, /return \[\];\s*\n  }\n\n  private async fetchGrokModelsDynamic/);
-  assert.match(source, /return \[\];\s*\n  }\n\n  public async start/);
-  assert.match(source, /hasCatalogModelsForProvider\(catalogModels, "antigravity"\)/);
-  assert.match(source, /hasCatalogModelsForProvider\(catalogModels, "grok"\)/);
-  assert.match(source, /catalog\.models = catalog\.models\.filter\(\(m: any\) => m\.backend_provider !== "antigravity"\)/);
-  assert.match(source, /catalog\.models = catalog\.models\.filter\(\(m: any\) => m\.backend_provider !== "grok"\)/);
-});

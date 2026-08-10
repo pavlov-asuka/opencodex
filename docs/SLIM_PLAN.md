@@ -58,8 +58,8 @@ node scripts/package-windows.mjs --out build/slim-verify --no-zip
 | **P2** | 记忆源导入 + 会话浏览面板 | 1,196 | 低 | ✅ 完成 |
 | **P3** | 语音 / GPT-Live | 8,600 | 低 | ✅ 完成 |
 | **P3.5** | 非 Windows 客户端(`mobile/` + `macos-app/`) | 4,924 | 零 | ✅ 完成 |
-| **P4** | Antigravity / Grok / Claude 订阅导入 | ~1,800 | 低 | ⬜ |
-| **P5** | Cursor(含 `router.ts` 手术) | ~17,900 | **中高** | ⬜ |
+| **P4** | 订阅导入(发现 / 导入 / UI 侧) | 501 | 低 | ✅ 完成 |
+| **P5** | Cursor + 订阅请求路径(`router.ts` 手术) | ~19,000 | **中高** | ⬜ |
 | **P6** | 子代理决策层 | ~1,600 | 中 | ⬜ |
 | **P7** | 依赖瘦身、dashboard 收尾、README、重新发版 | — | 低 | ⬜ |
 
@@ -126,11 +126,37 @@ node scripts/package-windows.mjs --out build/slim-verify --no-zip
 - `startup.sh` —— macOS launchd/pm2 开机脚本(Windows 侧的等价物是 `OpenCodex.exe` + 登录任务)
 - `src_v2/platform/darwin.ts` —— 平台运行时层,不是打包脚本;删它要同时改 `platform/index.ts` 的分发
 
-### P4 · Antigravity / Grok / Claude 订阅导入
+### P4 · 订阅导入的发现 / 导入 / UI 侧 ✅
 
-- `services/subscription_auth.ts`(934)
-- `gateway.ts`:`fetchAntigravityModelsDynamic` / `fetchGrokModelsDynamic` / `fetchClaudeModelsDynamic`(~170)、`/api/cli-bridge/*`(~138)、`recordSubscriptionImport`
-- 测试:`subscription_protocol.test.mjs` 的对应用例
+已删 501 行。四个 CLI(Antigravity / Grok / Claude / Cursor)的**导入通路**一次性拿掉,而不是按原计划只删前三个 —— 导入侧四家结构相同,分两次做没有收益,反而让 P5 更肿。
+
+- `gateway.ts` 475 行:`/api/cli-bridge/status` 与 `/activate`、四个 `fetch*ModelsDynamic`、四个 `has*Credential`、`SubscriptionImportState` / `readSubscriptionImports` / `recordSubscriptionImport` / `recordSubscriptionTest`、`/api/providers` 里的 `cliProviders` 合并、`/api/providers/test` 里的四个订阅分支、`hasCatalogModelsForProvider`
+- `dashboard.ts`:"本机订阅导入"卡片、`loadSubscriptions`、`activateSubscription`、`subscriptionIcon`、`renderSubscriptionRisk`
+
+**测试从此全绿(198/198)。** 那条长期失败的 CRLF 断言(`session_projection` 里"subscription imports require live provider models")测的正是刚删掉的订阅导入源码文本,随功能一起作废。
+
+**`subscription_auth.ts`(934 行)保留到 P5** —— `router.ts` 仍在请求路径上用它,原因见下。
+
+### P5 · Cursor + 订阅请求路径(高风险)
+
+- `services/cursor_gen/agent_pb.ts`(15,275)、`services/cursor_protocol.ts`(2,458)、`services/subscription_auth.ts`(934)
+- `router.ts` 手术:209 行 cursor 代码,含模块级状态 `cursorSessionHistory` / `cursorPendingToolCalls` / `cursorExternalToolQueues`,以及 `cursorHistoryKey` / `cursorRequestStateKey`(在 `handleResponses` 顶部**无条件调用**)、`pruneCursorPendingToolCalls`、`takeCursorExternalToolRequest`、`cursorMessagesIncludeHistory`、`cursorUserMessagesAfterToolResult`、`rememberCursorSession`
+- 依赖 `@bufbuild/protobuf` 随之出局
+- 测试:`subscription_protocol.test.mjs`(23 条,绝大多数是 Cursor 协议)
+
+**⚠️ P4 期间发现的陷阱**:`router.ts` 里 `isAntigravityModel` / `isGrokModel` / `isClaudeModel` / `isCursorModel` 四个分支**不只是订阅认证,还兼着协议适配器的选择**:
+
+```ts
+if (isClaudeModel) {
+  activeAdapter = new AnthropicAdapter();      // ← 合法 API Key 用户也走这里
+  finalTargetUrl = "https://api.anthropic.com/v1/messages";
+  const claudeKey = await SubscriptionAuthService.getClaudeAccessToken();
+  if (claudeKey.startsWith("sk-ant-")) finalHeaders["x-api-key"] = claudeKey;
+```
+
+`isClaudeModel` 的判定包含 `providerUrl.includes("anthropic")`,而 `getClaudeAccessToken()` **第一优先返回真实 API Key**。整块删掉会让"用 API Key 接入 Anthropic"这种完全正当的第三方 provider 失去适配器 —— 那正是本仓库存在的目的。Antigravity 分支同理挂着 `GoogleGeminiAdapter`。
+
+所以 P5 要做的不是删四个 if,而是**把适配器选择与订阅认证拆开**:保留按 provider 协议选适配器,去掉 `SubscriptionAuthService` 的取 token 路径。动手前先补一条"API Key 接入 Anthropic 仍走 AnthropicAdapter"的断言。
 
 ### P5 · Cursor(高风险)
 

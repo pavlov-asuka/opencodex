@@ -16,9 +16,6 @@ import { GatewayRouter, type GatewaySubagentDispatchCall, type GatewaySubagentDi
 import { clearProviderModelSelections, CredentialStore } from "../services/credential_store.js";
 import { RequestDecompressor } from "../core/decompressor.js";
 import { applyDefaultReasoningCapabilities, CatalogSyncService, buildFullCatalogEntry, getDefaultReasoningPresets } from "../services/catalog_sync.js";
-import { SubscriptionAuthService } from "../services/subscription_auth.js";
-import { fetchCursorModels } from "../services/cursor_protocol.js";
-import { getClaudeDesktopVersion, getCursorClientVersion } from "../services/subscription_auth.js";
 import { copyNativeRequestHeaders } from "./native_headers.js";
 import { ProviderConfig } from "../core/types.js";
 import { isNativeResponsesReasoningId } from "../core/responses_safety.js";
@@ -228,51 +225,6 @@ function recordProviderTest(providerName: string, status: ProviderTestStatus, me
   provider.last_test_at = new Date().toISOString();
   provider.last_test_message = message.slice(0, 500);
   CredentialStore.saveProviders(providers);
-}
-
-type SubscriptionImportState = {
-  imported_at?: string;
-  last_test_status?: ProviderTestStatus;
-  last_test_at?: string;
-  last_test_message?: string;
-};
-
-function readSubscriptionImports(dataDir: string): Record<string, SubscriptionImportState> {
-  const statePath = path.join(dataDir, "subscription_imports.json");
-  try {
-    const parsed = JSON.parse(fs.readFileSync(statePath, "utf-8"));
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function recordSubscriptionImport(dataDir: string, providerName: string): void {
-  fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-  const statePath = path.join(dataDir, "subscription_imports.json");
-  const imports = readSubscriptionImports(dataDir);
-  imports[providerName] = {
-    ...imports[providerName],
-    imported_at: new Date().toISOString(),
-    last_test_status: "untested",
-    last_test_message: "订阅已导入，等待测试连接"
-  };
-  fs.writeFileSync(statePath, JSON.stringify(imports, null, 2), { encoding: "utf-8", mode: 0o600 });
-  fs.chmodSync(statePath, 0o600);
-}
-
-function recordSubscriptionTest(dataDir: string, providerName: string, status: ProviderTestStatus, message: string): void {
-  fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
-  const statePath = path.join(dataDir, "subscription_imports.json");
-  const imports = readSubscriptionImports(dataDir);
-  imports[providerName] = {
-    ...imports[providerName],
-    last_test_status: status,
-    last_test_at: new Date().toISOString(),
-    last_test_message: message.slice(0, 500)
-  };
-  fs.writeFileSync(statePath, JSON.stringify(imports, null, 2), { encoding: "utf-8", mode: 0o600 });
-  fs.chmodSync(statePath, 0o600);
 }
 
 
@@ -671,26 +623,6 @@ export function preserveOfficialModels(catalog: any): void {
   catalog.models = [...officialMap.values(), ...ownerless, ...thirdParty];
 }
 
-
-function hasAntigravityCredential(): boolean {
-  return SubscriptionAuthService.hasAntigravityCredential();
-}
-
-function hasGrokCredential(): boolean {
-  return SubscriptionAuthService.hasGrokCredential();
-}
-
-function hasClaudeCredential(): boolean {
-  return SubscriptionAuthService.hasClaudeCredential();
-}
-
-function hasCursorCredential(): boolean {
-  return SubscriptionAuthService.hasCursorCredential();
-}
-
-function hasCatalogModelsForProvider(catalogModels: any[], providerName: string): boolean {
-  return catalogModels.some((model: any) => model?.backend_provider === providerName);
-}
 
 function credentialsMatch(candidate: string, expected: string): boolean {
   if (!candidate || !expected) return false;
@@ -1853,196 +1785,6 @@ export class CodexBridgeServer {
     }
   }
 
-  private antigravityModelFetchError = "";
-
-  private async fetchAntigravityModelsDynamic(): Promise<Array<{ slug: string; name: string }>> {
-    this.antigravityModelFetchError = "";
-    try {
-      let token = await SubscriptionAuthService.getAntigravityAccessToken();
-
-      if (!token) {
-        this.antigravityModelFetchError = hasAntigravityCredential()
-          ? "检测到 Antigravity 登录态，但访问令牌已失效且刷新失败；请在 Antigravity 中重新登录"
-          : "未检测到 Antigravity 登录凭证，请先完成登录";
-        return [];
-      }
-
-      const fetchModels = async (accessToken: string): Promise<Response> => fetch(
-        "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
-        {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-            "User-Agent": "antigravity/hub/2.2.1 darwin/arm64"
-          },
-          body: JSON.stringify({ project: "default-cli-project" }),
-          signal: AbortSignal.timeout(30000),
-        },
-      );
-
-      let res = await fetchModels(token);
-      if (res.status === 401 || res.status === 403) {
-        const refreshedToken = await SubscriptionAuthService.getAntigravityAccessToken(true);
-        if (refreshedToken) res = await fetchModels(refreshedToken);
-      }
-      if (!res.ok) {
-        this.antigravityModelFetchError = `Antigravity 模型目录请求失败（HTTP ${res.status}）`;
-        return [];
-      }
-
-      const data = await res.json() as any;
-      const modelsMap = data.models && typeof data.models === "object" ? data.models : {};
-      const result: Array<{ slug: string; name: string }> = [];
-      const seen = new Set<string>();
-
-      // The desktop client can place models in multiple groups. Preserve the
-      // vendor ordering while collecting every group, then fall back to the
-      // model map for responses without sort metadata.
-      const modelIds: string[] = [];
-      for (const sort of Array.isArray(data.agentModelSorts) ? data.agentModelSorts : []) {
-        for (const group of Array.isArray(sort?.groups) ? sort.groups : []) {
-          for (const id of Array.isArray(group?.modelIds) ? group.modelIds : []) {
-            if (typeof id === "string" && id.trim()) modelIds.push(id.trim());
-          }
-        }
-      }
-      if (modelIds.length === 0) modelIds.push(...Object.keys(modelsMap));
-
-      for (const id of modelIds) {
-        if (seen.has(id)) continue;
-        seen.add(id);
-        const info = modelsMap[id] || {};
-        const displayName = info.displayName || id;
-        result.push({ slug: id, name: displayName });
-      }
-      if (result.length > 0) return result;
-
-      this.antigravityModelFetchError = "Antigravity 实时模型目录返回成功，但没有可用模型";
-    } catch (err: any) {
-      this.antigravityModelFetchError = `Antigravity 模型目录请求异常：${err?.message || "未知错误"}`;
-      console.error("[OpenCodex] Dynamic Antigravity model fetch failed:", err?.message);
-    }
-
-    // Do not manufacture subscription models when the live catalog request
-    // fails. A fallback list can make a model from one subscription appear
-    // to belong to another provider and falsely report an import.
-    return [];
-  }
-
-  private async fetchGrokModelsDynamic(): Promise<Array<{ slug: string; name: string }>> {
-    try {
-      let token = await SubscriptionAuthService.getGrokAccessToken();
-
-      if (token) {
-        let res = await fetch("https://api.x.ai/v1/models", {
-          headers: {
-            "Authorization": `Bearer ${token}`,
-            "Content-Type": "application/json"
-          }
-        });
-        if (res.status === 401 || res.status === 403) {
-          token = await SubscriptionAuthService.getGrokAccessToken(true);
-          if (token) {
-            res = await fetch("https://api.x.ai/v1/models", {
-              headers: {
-                "Authorization": `Bearer ${token}`,
-                "Content-Type": "application/json"
-              }
-            });
-          }
-        }
-        if (res.ok) {
-          const data = await res.json() as any;
-          if (Array.isArray(data.data) && data.data.length > 0) {
-            const result: Array<{ slug: string; name: string }> = [];
-            for (const item of data.data) {
-              const id = item.id;
-              if (id) {
-                result.push({ slug: id, name: item.name || id });
-              }
-            }
-            if (result.length > 0) return result;
-          }
-        }
-      }
-    } catch (err: any) {
-      console.error("[OpenCodex] Dynamic Grok model fetch failed:", err?.message);
-    }
-    return [];
-  }
-
-  private async fetchClaudeModelsDynamic(): Promise<Array<{ slug: string; name: string }>> {
-    this.claudeModelFetchError = "";
-    try {
-      const token = await SubscriptionAuthService.getClaudeAccessToken();
-      if (!token) {
-        const failure = SubscriptionAuthService.getClaudeAuthFailure();
-        this.claudeModelFetchError = failure.includes("requires a Pro or Max subscription")
-          ? "已读取 Claude 登录态，但 Claude Code 订阅要求 Pro 或 Max 套餐"
-          : failure.startsWith("authorize_http_403")
-            ? "已读取 Claude 登录态，但 Claude 上游拒绝了订阅授权"
-            : failure.startsWith("desktop_cookie_unavailable")
-              ? "未能读取 Claude Desktop 登录态，请重新登录 Claude"
-              : "Claude 登录态无法换取可用订阅令牌";
-        return [];
-      }
-      const isApiKey = token.startsWith("sk-ant-");
-      const headers: Record<string, string> = {
-        "Authorization": `Bearer ${token}`,
-        "anthropic-version": "2023-06-01",
-        "Accept": "application/json",
-      };
-      if (isApiKey) {
-        headers["x-api-key"] = token;
-      } else {
-        headers["anthropic-beta"] = "oauth-2025-04-20";
-        headers["anthropic-client-platform"] = "DESKTOP_APP";
-        headers["anthropic-client-version"] = getClaudeDesktopVersion();
-      }
-      const res = await fetch("https://api.anthropic.com/v1/models?beta=true", {
-        headers,
-        signal: AbortSignal.timeout(15000),
-      });
-      if (res.ok) {
-        const data = await res.json() as any;
-        if (Array.isArray(data.data) && data.data.length > 0) {
-          return data.data
-            .filter((m: any) => m?.id)
-            .map((m: any) => ({ slug: String(m.id), name: String(m.display_name || m.id) }));
-        }
-      } else {
-        const errorText = (await res.text()).replace(/\s+/g, " ");
-        this.claudeModelFetchError = /requires a Pro or Max subscription/i.test(errorText)
-          ? "已读取 Claude 登录态，但 Claude Code 订阅要求 Pro 或 Max 套餐"
-          : res.status === 401
-            ? "Claude 订阅令牌已失效，请重新登录 Claude"
-            : `Claude 模型目录请求失败（HTTP ${res.status}）`;
-      }
-    } catch (err: any) {
-      console.error("[OpenCodex] Dynamic Claude model fetch failed:", err?.message);
-      this.claudeModelFetchError = "Claude 模型目录请求异常，请稍后重试";
-    }
-    return [];
-  }
-
-  private async fetchCursorModelsDynamic(): Promise<Array<{ slug: string; name: string }>> {
-    try {
-      let token = await SubscriptionAuthService.getCursorAccessToken();
-      if (!token) return [];
-      let result = await fetchCursorModels(token, getCursorClientVersion(), AbortSignal.timeout(15000));
-      if (result.length > 0) return result;
-
-      token = await SubscriptionAuthService.getCursorAccessToken(true);
-      if (!token) return [];
-      result = await fetchCursorModels(token, getCursorClientVersion(), AbortSignal.timeout(15000));
-      return result;
-    } catch (err: any) {
-      console.error("[OpenCodex] Dynamic Cursor model fetch failed:", err?.message);
-    }
-    return [];
-  }
-
   public async start(overridePort?: number): Promise<void> {
 
     if (overridePort && typeof overridePort === "number") {
@@ -2544,33 +2286,6 @@ export class CodexBridgeServer {
             } catch {}
           }
 
-          const subscriptionImports = readSubscriptionImports(this.dataDir);
-          const cliProviders = [
-            {
-              id: "antigravity",
-              name: "antigravity",
-              status: hasCatalogModelsForProvider(catalogModels, "antigravity") ? "configured" : "not_configured",
-              test_status: subscriptionImports.antigravity?.last_test_status || "untested",
-              credential_storage: "keychain",
-              active_models: catalogModels.filter((m: any) => m.backend_provider === "antigravity").map((m: any) => ({ id: m.slug, enabled: true }))
-            },
-            {
-              id: "grok",
-              name: "grok",
-              status: hasCatalogModelsForProvider(catalogModels, "grok") ? "configured" : "not_configured",
-              test_status: subscriptionImports.grok?.last_test_status || "untested",
-              credential_storage: "keychain",
-              active_models: catalogModels.filter((m: any) => m.backend_provider === "grok").map((m: any) => ({ id: m.slug, enabled: true }))
-            },
-            {
-              id: "claude",
-              name: "claude",
-              status: hasCatalogModelsForProvider(catalogModels, "claude") ? "configured" : "not_configured",
-              test_status: subscriptionImports.claude?.last_test_status || "untested",
-              credential_storage: "none",
-              active_models: catalogModels.filter((m: any) => m.backend_provider === "claude").map((m: any) => ({ id: m.slug, enabled: true }))
-            }
-          ];
 
           const apiProviders = CredentialStore.loadProviders().map((p: any) => {
             const hasApiKey = Boolean(CredentialStore.resolveApiKey(p));
@@ -2607,7 +2322,7 @@ export class CodexBridgeServer {
             };
           });
 
-          const providers = [...cliProviders, ...apiProviders];
+          const providers = apiProviders;
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ providers }));
           return;
@@ -2765,143 +2480,6 @@ export class CodexBridgeServer {
           return;
         }
 
-        if (req.method === "GET" && url.pathname === "/api/cli-bridge/status") {
-          const configPath = codexConfigPath();
-          let isGatewayActive = false;
-          if (fs.existsSync(configPath)) {
-            const content = fs.readFileSync(configPath, "utf-8");
-            // A leftover model_catalog_json entry is harmless in native mode.
-            // Only the managed block means the gateway is currently enabled.
-            isGatewayActive = content.includes("opencodex managed");
-          }
-
-          let catalogModels: any[] = [];
-          const catalogPath = path.join(os.homedir(), ".opencodex", "custom_model_catalog.json");
-          if (fs.existsSync(catalogPath)) {
-            try {
-              const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf-8"));
-              catalogModels = Array.isArray(catalog.models) ? catalog.models : [];
-            } catch {}
-          }
-          const hasAntigravity = hasAntigravityCredential();
-          const hasGrok = hasGrokCredential();
-          const hasClaude = hasClaudeCredential();
-          const hasCursor = hasCursorCredential();
-
-          const imports = readSubscriptionImports(this.dataDir);
-
-          const status = {
-            antigravity: {
-              detected: hasAntigravity,
-              active: isGatewayActive && hasCatalogModelsForProvider(catalogModels, "antigravity"),
-              test_status: imports.antigravity?.last_test_status || "untested",
-              test_message: imports.antigravity?.last_test_message || ""
-            },
-            grok: {
-              detected: hasGrok,
-              active: isGatewayActive && hasCatalogModelsForProvider(catalogModels, "grok"),
-              test_status: imports.grok?.last_test_status || "untested",
-              test_message: imports.grok?.last_test_message || ""
-            },
-            claude: {
-              detected: hasClaude,
-              active: hasClaude && isGatewayActive && hasCatalogModelsForProvider(catalogModels, "claude"),
-              test_status: imports.claude?.last_test_status || "untested",
-              test_message: imports.claude?.last_test_message || ""
-            },
-            cursor: {
-              detected: hasCursor,
-              active: hasCursor && isGatewayActive && hasCatalogModelsForProvider(catalogModels, "cursor"),
-              test_status: imports.cursor?.last_test_status || "untested",
-              test_message: imports.cursor?.last_test_message || ""
-            }
-          };
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify(status));
-          return;
-        }
-
-
-        if (req.method === "POST" && url.pathname === "/api/cli-bridge/activate") {
-          try {
-            const body = await this.parseJsonBody(req);
-            const cli = body.cli || "antigravity";
-            const catalogPath = path.join(os.homedir(), ".opencodex", "custom_model_catalog.json");
-            let catalog: any = { models: [] };
-            if (fs.existsSync(catalogPath)) {
-              try { catalog = JSON.parse(fs.readFileSync(catalogPath, "utf-8")); } catch {}
-            }
-            if (!Array.isArray(catalog.models)) catalog.models = [];
-            preserveOfficialModels(catalog);
-
-            const addModel = (slug: string, name: string, providerName: string) => {
-              upsertProviderCatalogModel(catalog, slug, slug, name, providerName);
-            };
-
-            if (cli === "antigravity") {
-              const dynamicModels = await this.fetchAntigravityModelsDynamic();
-              if (dynamicModels.length === 0) {
-                throw new Error(this.antigravityModelFetchError || "Antigravity 没有返回实时可用模型，未执行导入；不会使用内置兜底模型");
-              }
-              catalog.models = catalog.models.filter((m: any) => m.backend_provider !== "antigravity");
-              for (const m of dynamicModels) {
-                addModel(m.slug, m.name, "antigravity");
-              }
-            } else if (cli === "grok") {
-              const dynamicGrokModels = await this.fetchGrokModelsDynamic();
-              if (dynamicGrokModels.length === 0) {
-                throw new Error("Grok 没有返回实时可用模型，未执行导入；不会使用内置兜底模型");
-              }
-              catalog.models = catalog.models.filter((m: any) => m.backend_provider !== "grok");
-              for (const m of dynamicGrokModels) {
-                addModel(m.slug, m.name, "grok");
-              }
-            } else if (cli === "claude") {
-              const dynamicClaudeModels = await this.fetchClaudeModelsDynamic();
-              if (dynamicClaudeModels.length === 0) {
-                throw new Error(this.claudeModelFetchError || "Claude 没有返回可用模型，未执行导入；请检查本机登录态");
-              }
-              catalog.models = catalog.models.filter((m: any) => m.backend_provider !== "claude");
-              for (const m of dynamicClaudeModels) {
-                addModel(m.slug, m.name, "claude");
-              }
-            } else if (cli === "cursor") {
-              const dynamicCursorModels = await this.fetchCursorModelsDynamic();
-              if (dynamicCursorModels.length === 0) {
-                throw new Error("Cursor 没有返回可用模型，未执行导入；请检查本机登录态");
-              }
-              catalog.models = catalog.models.filter((m: any) => m.backend_provider !== "cursor");
-              for (const m of dynamicCursorModels) {
-                addModel(m.slug, m.name, "cursor");
-              }
-            }
-
-            preserveOfficialModels(catalog);
-            fs.writeFileSync(catalogPath, JSON.stringify(catalog, null, 2), "utf-8");
-
-            // CLI imports add provider-owned models, so managed routing is
-            // enabled only when the final catalog actually contains one.
-            const configPath = codexConfigPath();
-            if (fs.existsSync(configPath)) {
-              let content = fs.readFileSync(configPath, "utf-8");
-              fs.writeFileSync(
-                configPath,
-                buildCodexRoutingConfig(content, this.port, this.adminToken, catalogPath, hasThirdPartyModels(CredentialStore.loadProviders(), catalog)),
-                "utf-8",
-              );
-            }
-            CatalogSyncService.syncCustomModelsToCodexCache();
-
-            recordSubscriptionImport(this.dataDir, String(cli));
-
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ status: "success", cli }));
-          } catch (err: any) {
-            res.writeHead(500, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: err.message }));
-          }
-          return;
-        }
 
         if (req.method === "POST" && url.pathname === "/api/providers/test-model") {
           try {
@@ -2986,11 +2564,7 @@ export class CodexBridgeServer {
             let apiKey = body.api_key || body.apiKey;
 
             const finishTest = (status: ProviderTestStatus, message: string) => {
-              if (providerName === "antigravity" || providerName === "grok" || providerName === "claude" || providerName === "cursor") {
-                recordSubscriptionTest(this.dataDir, providerName, status, message);
-              } else {
-                recordProviderTest(providerName, status, message);
-              }
+              recordProviderTest(providerName, status, message);
               res.writeHead(200, { "Content-Type": "application/json" });
               res.end(JSON.stringify({ status, message }));
             };
@@ -3007,59 +2581,6 @@ export class CodexBridgeServer {
               finishTest("failed", "缺少服务商名称");
               return;
             }
-
-            if (providerName === "antigravity") {
-              const liveModels = await this.fetchAntigravityModelsDynamic();
-              finishTest(
-                liveModels.length > 0 ? "connected" : "failed",
-                liveModels.length > 0
-                  ? `Google Antigravity 订阅正常，已获取 ${liveModels.length} 个实时模型`
-                  : this.antigravityModelFetchError || (hasAntigravityCredential()
-                    ? "检测到 Antigravity 登录态，但实时模型获取失败；登录态可能已过期或被撤销"
-                    : "未检测到 Antigravity 登录凭证，请先完成登录")
-              );
-              return;
-            }
-
-            if (providerName === "grok") {
-              const liveModels = await this.fetchGrokModelsDynamic();
-              finishTest(
-                liveModels.length > 0 ? "connected" : "failed",
-                liveModels.length > 0
-                  ? `x.AI Grok 订阅正常，已获取 ${liveModels.length} 个实时模型`
-                  : hasGrokCredential()
-                    ? "检测到 Grok 登录态，但实时模型获取失败；登录态可能已过期或被撤销"
-                    : "未检测到 Grok 登录凭证，请在终端运行 grok login"
-              );
-              return;
-            }
-
-            if (providerName === "claude") {
-              const liveModels = await this.fetchClaudeModelsDynamic();
-              finishTest(
-                liveModels.length > 0 ? "connected" : "failed",
-                liveModels.length > 0
-                  ? `Claude 订阅正常，已获取 ${liveModels.length} 个可用模型`
-                  : this.claudeModelFetchError || (hasClaudeCredential()
-                    ? "检测到 Claude 登录态，但可用模型获取失败"
-                    : "Claude 本机登录态不存在或已失效，请先完成 Claude 登录")
-              );
-              return;
-            }
-
-            if (providerName === "cursor") {
-              const liveModels = await this.fetchCursorModelsDynamic();
-              finishTest(
-                liveModels.length > 0 ? "connected" : "failed",
-                liveModels.length > 0
-                  ? `Cursor 订阅正常，已获取 ${liveModels.length} 个可用模型`
-                  : hasCursorCredential()
-                    ? "检测到 Cursor 登录态，但可用模型获取失败"
-                    : "未检测到 Cursor 登录凭证，请先完成登录"
-              );
-              return;
-            }
-
 
             if (!baseUrl) {
               finishTest("failed", "未配置 Endpoint / Base URL");
