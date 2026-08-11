@@ -32,7 +32,7 @@ import {
   providerBridgePath,
 } from "../platform/index.js";
 import type { DesktopController } from "../platform/index.js";
-import { nativeEgressEnabled, nativeEgressSettingPath } from "../platform/paths.js";
+import { adoptNativeEgressOverride, nativeEgressEnabled, nativeEgressSettingPath } from "../platform/paths.js";
 
 // Re-exported so existing importers (catalog_sync) keep their entry point.
 export { codexConfigPath };
@@ -3024,6 +3024,11 @@ export class CodexBridgeServer {
 
       this.server.listen(this.port, "127.0.0.1", () => {
         console.log(`[CodexBridge V2] Server listening on http://127.0.0.1:${this.port}`);
+        // A hand-set OPENCODEX_NATIVE_EGRESS becomes the stored setting, so
+        // the environment escape hatch survives the publish that follows.
+        try { adoptNativeEgressOverride(this.dataDir); } catch (error: any) {
+          console.warn(`[OpenCodex Gateway] Could not adopt the native-egress override: ${error?.message || error}`);
+        }
         // Publish the bridge environment only once the port is actually held.
         // Registering earlier meant a second gateway could overwrite a healthy
         // instance's variables and then clear them entirely when it exited on
