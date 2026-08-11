@@ -196,6 +196,8 @@ async function main() {
   });
 
   await writeFile(path.join(stageDir, "Start-OpenCodex.cmd"), LAUNCHER, "utf-8");
+  // The way out that does not depend on anything of ours still working.
+  await cp(path.join(repoRoot, "scripts", "restore-native-codex.cmd"), path.join(stageDir, "Restore-Native-Codex.cmd"));
   await writeFile(path.join(stageDir, "README.md"), README, "utf-8");
 
   // The double-clickable entry point lives at the root of the folder; the copy

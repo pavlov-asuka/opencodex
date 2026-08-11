@@ -156,9 +156,31 @@ test("a gateway that loses the port race cannot detach the running one", () => {
   // EADDRINUSE, and then unregister on the way out — leaving the healthy
   // instance's Desktop pointed at variables that no longer existed.
   const listenAt = source.indexOf('this.server.listen(this.port, "127.0.0.1"');
-  const registerAt = source.indexOf("registerProviderBridgeEnvironment(this.port)");
   assert.ok(listenAt >= 0, "listen call must exist");
-  assert.ok(registerAt > listenAt, "the bridge environment must be published only after the port is held");
+  assert.ok(
+    source.indexOf("registerProviderBridgeEnvironment(this.port)", listenAt) > listenAt,
+    "startup must publish the bridge environment inside the listen callback",
+  );
+
+  // Other call sites may republish — a settings change has to reach the bridge
+  // — but only for an instance that already owns the port. An unguarded call
+  // anywhere would let a losing instance overwrite a healthy one's variables.
+  // The startup call is the one whose return value decides ownership; it is
+  // identified by that shape rather than by distance from the listen call.
+  const startupCall = source.indexOf("if (registerProviderBridgeEnvironment(this.port)) {");
+  assert.ok(startupCall > listenAt, "the ownership-deciding registration must sit inside the listen callback");
+
+  const calls = [...source.matchAll(/registerProviderBridgeEnvironment\(this\.port\)/g)];
+  assert.ok(calls.length >= 1);
+  for (const call of calls) {
+    if (call.index >= startupCall && call.index <= startupCall + 60) continue;
+    const preceding = source.slice(Math.max(0, call.index - 120), call.index);
+    assert.match(
+      preceding,
+      /registeredProviderBridge/,
+      `registerProviderBridgeEnvironment at index ${call.index} must be guarded by registeredProviderBridge`,
+    );
+  }
 
   // And only the instance that registered may unregister.
   assert.match(source, /if \(this\.registeredProviderBridge\) \{[\s\S]{0,160}unregisterProviderBridgeEnvironment\(\);/);

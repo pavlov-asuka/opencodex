@@ -22,6 +22,7 @@ import { RequestDecompressor } from "./core/decompressor.js";
 import { copySafeResponseHeaders, writeHttpResponseChunked } from "./services/http_stream.js";
 import { fetchUpstream, upstreamErrorDetails } from "./services/upstream_fetch.js";
 import { copyNativeRequestHeaders } from "./server/native_headers.js";
+import { nativeEgressEnabled } from "./platform/paths.js";
 
 export type CodexProvider = "openai" | "opencodex";
 
@@ -726,7 +727,13 @@ async function startNativeEgressRouter(
   return { server, port, basePath, subagentDisplaySettings };
 }
 
-export function nativeRuntimeArgs(args: string[], egressPort: number, egressBasePath = "/v1"): string[] {
+export function nativeRuntimeArgs(args: string[], egressPort: number, egressBasePath = "/v1", intercept = true): string[] {
+  if (!intercept) {
+    // Official traffic goes straight to ChatGPT. Nothing in this project sits
+    // in that path, so no bug here can take official Codex down with it —
+    // and no Codex-spawned subagent can be handed to a third-party model.
+    return args;
+  }
   const overrides = [
     "-c", `openai_base_url=http://127.0.0.1:${egressPort}${egressBasePath}`,
     // The local bridge is deliberately HTTP-only. Native child metadata is
@@ -1268,7 +1275,7 @@ async function runProviderBridge(): Promise<void> {
   }
 
   function spawnRuntime(provider: CodexProvider): ProviderRuntime {
-    const childArgs = provider === NATIVE_PROVIDER ? nativeRuntimeArgs(args, nativeEgress.port, nativeEgress.basePath) : args;
+    const childArgs = provider === NATIVE_PROVIDER ? nativeRuntimeArgs(args, nativeEgress.port, nativeEgress.basePath, nativeEgressEnabled()) : args;
     const child = spawn(nativeCodexPath(), childArgs, {
       env: {
         ...process.env,

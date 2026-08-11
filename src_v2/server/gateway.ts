@@ -35,6 +35,7 @@ import {
   stopDesktopClients,
   unregisterProviderBridgeEnvironment,
 } from "../platform/index.js";
+import { nativeEgressEnabled, nativeEgressSettingPath } from "../platform/paths.js";
 
 // Re-exported so existing importers (catalog_sync) keep their entry point.
 export { codexConfigPath };
@@ -1883,7 +1884,7 @@ export class CodexBridgeServer {
         // 1. Handshake / Healthcheck & Dashboard UI
         if (req.method === "GET" && url.pathname === "/health") {
           res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ status: "ok", name: "CodexBridge Engine V2", version: "2.0.2", opencodex: true }));
+          res.end(JSON.stringify({ status: "ok", name: "CodexBridge Engine V2", version: "2.1.0", opencodex: true }));
           return;
         }
 
@@ -2771,6 +2772,59 @@ export class CodexBridgeServer {
         }
 
 
+        if (req.method === "GET" && url.pathname === "/api/native-egress") {
+          res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+          res.end(JSON.stringify({ enabled: nativeEgressEnabled(this.dataDir) }));
+          return;
+        }
+
+        if (req.method === "POST" && url.pathname === "/api/native-egress") {
+          try {
+            const body = await this.parseJsonBody(req);
+            const enabled = body?.enabled !== false;
+            fs.mkdirSync(this.dataDir, { recursive: true });
+            fs.writeFileSync(nativeEgressSettingPath(this.dataDir), JSON.stringify({ enabled }, null, 2), "utf-8");
+            // The bridge reads this from the environment Desktop passes down,
+            // so republish it and let the caller restart Desktop.
+            if (this.registeredProviderBridge) registerProviderBridgeEnvironment(this.port);
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ enabled, restart_required: true }));
+          } catch (err: any) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: err.message }));
+          }
+          return;
+        }
+
+        // Leave OpenCodex entirely: undo everything that makes Codex Desktop
+        // route through this project, so a broken gateway or bridge cannot
+        // keep Codex broken with it.
+        if (req.method === "POST" && url.pathname === "/api/disengage") {
+          try {
+            const configPath = codexConfigPath();
+            if (fs.existsSync(configPath)) {
+              const content = fs.readFileSync(configPath, "utf-8");
+              fs.writeFileSync(configPath, `${stripManagedCodexConfig(content)}\n`, "utf-8");
+            }
+            // The decisive step, and the one plain "restore native" never did:
+            // while CODEX_CLI_PATH points here, Desktop keeps launching the
+            // bridge no matter what the config says.
+            unregisterProviderBridgeEnvironment();
+            this.registeredProviderBridge = false;
+            repairNativeRollouts();
+            restartDesktopClients(true);
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({
+              status: "success",
+              message: "Codex 已脱离 OpenCodex：环境变量已注销、托管配置已移除、Desktop 正在重启。第三方模型与凭据都保留，重新启动网关即可恢复。",
+            }));
+          } catch (err: any) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: err.message }));
+          }
+          return;
+        }
+
         if (req.method === "POST" && url.pathname === "/api/reset") {
           try {
             // Native restore keeps the configured provider credentials and
@@ -2798,6 +2852,12 @@ export class CodexBridgeServer {
             // Remove those persisted records before the native desktop client
             // sends this thread back to chatgpt.com.
             repairNativeRollouts();
+
+            // Without this the Desktop keeps launching the bridge even though
+            // the managed config is gone, so "restore native" was never a
+            // complete way out.
+            unregisterProviderBridgeEnvironment();
+            this.registeredProviderBridge = false;
 
             restartDesktopClients(true);
 
