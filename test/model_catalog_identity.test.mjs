@@ -320,13 +320,21 @@ test("managed Codex config follows the current gateway port across restarts", ()
 });
 
 test("managed Codex config strips corrupted duplicate blocks and orphaned keys idempotently", () => {
-  const corrupted = `# >>> opencodex managed >>>\nmodel_catalog_json = "/path/1"\nopenai_base_url = "http://127.0.0.1:8765/v1"\n# <<< opencodex managed >>>\n\n# >>> opencodex managed >>>\nmodel_catalog_json = "/path/1"\nopenai_base_url = "http://127.0.0.1:8765/v1"\n# <<< opencodex managed >>>\n\nmodel = "gpt-5.5"\nmodel_catalog_json = "/path/2"\n\n# >>> opencodex managed >>>\n[model_providers.opencodex]\nname = "OpenCodex"\n# <<< opencodex managed >>>\n\n[model_providers.opencodex]\nname = "OpenCodex"\n`;
+  // The orphaned keys outside the markers are the interesting part. One
+  // carries a value only OpenCodex writes (a catalog under ~/.opencodex) and
+  // must be cleaned up; the other is the user's own and must survive. Before
+  // the scoping fix both were deleted by key name alone.
+  const corrupted = `# >>> opencodex managed >>>\nmodel_catalog_json = "/path/1"\nopenai_base_url = "http://127.0.0.1:8765/v1"\n# <<< opencodex managed >>>\n\n# >>> opencodex managed >>>\nmodel_catalog_json = "/path/1"\nopenai_base_url = "http://127.0.0.1:8765/v1"\n# <<< opencodex managed >>>\n\nmodel = "gpt-5.5"\nmodel_catalog_json = "/home/me/.opencodex/custom_model_catalog.json"\nopenai_base_url = "https://corporate-proxy.example.com/v1"\n\n# >>> opencodex managed >>>\n[model_providers.opencodex]\nname = "OpenCodex"\n# <<< opencodex managed >>>\n\n[model_providers.opencodex]\nname = "OpenCodex"\n`;
   const firstPass = buildManagedCodexConfig(corrupted, 8765, "token-1");
   const secondPass = buildManagedCodexConfig(firstPass, 8765, "token-1");
 
   assert.equal((firstPass.match(/# >>> opencodex managed >>>/g) || []).length, 2);
-  assert.equal((firstPass.match(/model_catalog_json/g) || []).length, 1);
+  assert.equal((firstPass.match(/model_catalog_json/g) || []).length, 1, "the orphaned OpenCodex catalog key is removed and rewritten once");
   assert.equal((firstPass.match(/\[model_providers\.opencodex\]/g) || []).length, 1);
+  assert.match(firstPass, /openai_base_url = "https:\/\/corporate-proxy\.example\.com\/v1"/, "the user's own endpoint survives");
+  // Not the string anywhere — the managed provider block legitimately carries
+  // base_url = "http://127.0.0.1:8765/v1". Only the orphaned key goes.
+  assert.doesNotMatch(firstPass, /openai_base_url = "http:\/\/127\.0\.0\.1/, "OpenCodex's own loopback leftovers do not");
   assert.equal(firstPass, secondPass);
 });
 

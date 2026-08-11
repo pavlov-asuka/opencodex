@@ -156,11 +156,49 @@ function buildModelProtocolMap(
 }
 
 
+/** Decode a TOML string value — literal, basic, or bare. */
+function tomlStringValue(raw: string): string {
+  const text = String(raw || "").trim();
+  if (text.startsWith("'") && text.endsWith("'")) return text.slice(1, -1);
+  if (text.startsWith('"') && text.endsWith('"')) {
+    return text.slice(1, -1).replace(/\\\\/g, "\\").replace(/\\"/g, '"');
+  }
+  return text;
+}
+
+/** Is this the catalog file OpenCodex generates, rather than the user's own? */
+function isOpenCodexCatalogPath(value: string): boolean {
+  const normalized = value.replace(/\\/g, "/").toLowerCase();
+  return normalized.includes("/.opencodex/") && normalized.endsWith("custom_model_catalog.json");
+}
+
+/** Older OpenCodex versions pointed this at their own loopback gateway. */
+function isLoopbackBaseUrl(value: string): boolean {
+  return /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/i.test(value.trim());
+}
+
+/**
+ * Remove what OpenCodex added to config.toml, and nothing else.
+ *
+ * Marker-delimited blocks are unambiguous. The two bare keys below are not:
+ * this used to strip every top-level `model_catalog_json` and
+ * `openai_base_url` line outright, so a user who kept their own catalog or
+ * their own proxy endpoint in config.toml silently lost it the first time
+ * they pressed "restore native" or "disengage". They are still cleaned up when
+ * they carry a value only OpenCodex writes — a catalog inside ~/.opencodex, or
+ * a loopback base URL from a version that predated the marker blocks.
+ */
 export function stripManagedCodexConfig(content: string): string {
   let cleaned = content || "";
   cleaned = cleaned.replace(/# >>> opencodex managed >>>[\s\S]*?# <<< opencodex managed (?:>>>|<<<)\r?\n?/gi, "");
-  cleaned = cleaned.replace(/^\s*model_catalog_json\s*=.*$\r?\n?/gm, "");
-  cleaned = cleaned.replace(/^\s*openai_base_url\s*=.*$\r?\n?/gm, "");
+  cleaned = cleaned.replace(
+    /^[ \t]*model_catalog_json[ \t]*=([^\n]*)$\r?\n?/gm,
+    (line, value) => (isOpenCodexCatalogPath(tomlStringValue(value)) ? "" : line),
+  );
+  cleaned = cleaned.replace(
+    /^[ \t]*openai_base_url[ \t]*=([^\n]*)$\r?\n?/gm,
+    (line, value) => (isLoopbackBaseUrl(tomlStringValue(value)) ? "" : line),
+  );
   cleaned = cleaned.replace(/^\s*\[model_providers\.opencodex\][\s\S]*?(?=\n\s*\[|\n\s*# >>>|$)/gm, "");
   return cleaned.trim();
 }
