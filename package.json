@@ -7,7 +7,7 @@
     "build": "node scripts/build.mjs",
     "build:windows": "node scripts/build.mjs --windows",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test test/*.test.mjs",
+    "test": "npm run build && node scripts/run-tests.mjs",
     "start": "node dist/server.js",
     "dev": "tsc --watch",
     "postinstall": "tsc",

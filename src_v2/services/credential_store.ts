@@ -40,7 +40,16 @@ export function clearProviderModelSelections(providers: ProviderConfig[]): Provi
 
 export class CredentialStore {
   private static readonly providerService = "OpenCodex Provider Credential";
-  private static providersConfigPath = path.join(os.homedir(), ".opencodex", "providers.json");
+
+  /**
+   * Resolved per access rather than at module load. As a load-time constant it
+   * ignored OPENCODEX_DATA_DIR entirely, so a test that redirected the data
+   * directory still read and wrote the developer's real providers.json.
+   */
+  private static get providersConfigPath(): string {
+    const dataDir = String(process.env.OPENCODEX_DATA_DIR || "").trim();
+    return path.join(dataDir || path.join(os.homedir(), ".opencodex"), "providers.json");
+  }
   private static cachedProviders: ProviderConfig[] = [];
   private static lastMtime = 0;
 

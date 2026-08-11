@@ -26,15 +26,11 @@ import { SubagentOrchestrator } from "../services/subagent_orchestrator.js";
 import { agentMessageOracleEnabled, hasEncryptedAgentMessage, resolveEncryptedAgentMessages } from "../services/agent_message_oracle.js";
 import {
   codexConfigPath,
-  desktopAppServerState,
-  launchDesktopClient,
+  desktopController,
   nativeCodexExecutablePath,
   providerBridgePath,
-  registerProviderBridgeEnvironment,
-  restartDesktopClients,
-  stopDesktopClients,
-  unregisterProviderBridgeEnvironment,
 } from "../platform/index.js";
+import type { DesktopController } from "../platform/index.js";
 import { nativeEgressEnabled, nativeEgressSettingPath } from "../platform/paths.js";
 
 // Re-exported so existing importers (catalog_sync) keep their entry point.
@@ -790,9 +786,18 @@ export class CodexBridgeServer {
   private readonly taskRouter: TaskRouter;
   private readonly subagentOrchestrator: SubagentOrchestrator;
   private subagentRouteBindings = new Map<string, SubagentRouteBinding>();
+  /**
+   * Every escape from this process into the host — the registry, taskkill,
+   * launching Desktop — goes through here. Injected so tests can drive the
+   * gateway without publishing CODEX_CLI_PATH into the developer's own
+   * environment and deleting it again on stop.
+   */
+  private readonly desktop: DesktopController;
+  private desktopLaunchTimer: NodeJS.Timeout | null = null;
 
-  constructor(port = 8765) {
+  constructor(port = 8765, desktop: DesktopController = desktopController) {
     this.port = port;
+    this.desktop = desktop;
     this.dataDir = process.env.OPENCODEX_DATA_DIR || path.join(os.homedir(), ".opencodex");
     this.desktopRestartMarkerPath = path.join(this.dataDir, "restart_desktop_after_gateway_ready");
     this.adminToken = this.loadOrCreateAdminToken();
@@ -1150,18 +1155,28 @@ export class CodexBridgeServer {
       return;
     }
 
-    const launchTimer = setTimeout(() => {
-      if (desktopAppServerState() === "bridge") {
+    // Held so stop() can cancel it. An armed timer that outlived the server
+    // could still restart Desktop long after the gateway that scheduled it
+    // was gone — in the test suite, mid-run.
+    this.desktopLaunchTimer = setTimeout(() => {
+      this.desktopLaunchTimer = null;
+      if (this.desktop.desktopAppServerState() === "bridge") {
         console.log("[OpenCodex Gateway] Desktop is already attached to the provider bridge; skipped Desktop restart.");
         return;
       }
       // A native app-server cannot receive CODEX_CLI_PATH retroactively. Only
       // this one-time takeover path restarts Desktop; ordinary gateway
       // start/stop cycles leave an already-bridged Desktop untouched.
-      restartDesktopClients(true);
+      this.restartDesktop(true);
       console.log("[OpenCodex Gateway] Gateway is ready; launched Desktop through the provider bridge after model catalog initialization.");
     }, 500);
-    launchTimer.unref?.();
+    this.desktopLaunchTimer.unref?.();
+  }
+
+  /** Stop and relaunch Desktop through the injected controller. */
+  private restartDesktop(launchWithCdp: boolean): void {
+    this.desktop.stopDesktopClients();
+    this.desktop.launchDesktopClient(launchWithCdp);
   }
 
   private isSubagentResponsesRequest(body: any, req?: http.IncomingMessage): boolean {
@@ -2558,7 +2573,7 @@ export class CodexBridgeServer {
             // Launching it here races the PM2 restart and makes native-only
             // models appear permanently until another manual restart.
             this.requestDesktopLaunchAfterGatewayReady();
-            stopDesktopClients();
+            this.desktop.stopDesktopClients();
 
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ status: "success", message: "桌面端与网关服务正在重新启动..." }));
@@ -2571,7 +2586,7 @@ export class CodexBridgeServer {
                 // old process already has the final config/catalog, so it is
                 // safe to consume the marker and relaunch the desktop here.
                 try { fs.unlinkSync(this.desktopRestartMarkerPath); } catch {}
-                launchDesktopClient(true);
+                this.desktop.launchDesktopClient(true);
                 this.gatewayRestartInProgress = false;
               }
             }, 300);
@@ -2786,7 +2801,7 @@ export class CodexBridgeServer {
             fs.writeFileSync(nativeEgressSettingPath(this.dataDir), JSON.stringify({ enabled }, null, 2), "utf-8");
             // The bridge reads this from the environment Desktop passes down,
             // so republish it and let the caller restart Desktop.
-            if (this.registeredProviderBridge) registerProviderBridgeEnvironment(this.port);
+            if (this.registeredProviderBridge) this.desktop.registerProviderBridgeEnvironment(this.port);
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ enabled, restart_required: true }));
           } catch (err: any) {
@@ -2809,10 +2824,10 @@ export class CodexBridgeServer {
             // The decisive step, and the one plain "restore native" never did:
             // while CODEX_CLI_PATH points here, Desktop keeps launching the
             // bridge no matter what the config says.
-            unregisterProviderBridgeEnvironment();
+            this.desktop.unregisterProviderBridgeEnvironment();
             this.registeredProviderBridge = false;
             repairNativeRollouts();
-            restartDesktopClients(true);
+            this.restartDesktop(true);
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({
               status: "success",
@@ -2856,10 +2871,10 @@ export class CodexBridgeServer {
             // Without this the Desktop keeps launching the bridge even though
             // the managed config is gone, so "restore native" was never a
             // complete way out.
-            unregisterProviderBridgeEnvironment();
+            this.desktop.unregisterProviderBridgeEnvironment();
             this.registeredProviderBridge = false;
 
-            restartDesktopClients(true);
+            this.restartDesktop(true);
 
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ status: "success", gateway_active: false }));
@@ -2900,9 +2915,9 @@ export class CodexBridgeServer {
         // Registering earlier meant a second gateway could overwrite a healthy
         // instance's variables and then clear them entirely when it exited on
         // EADDRINUSE, silently detaching Desktop from the running bridge.
-        if (registerProviderBridgeEnvironment(this.port)) {
+        if (this.desktop.registerProviderBridgeEnvironment(this.port)) {
           this.registeredProviderBridge = true;
-          if (desktopAppServerState() !== "bridge") {
+          if (this.desktop.desktopAppServerState() !== "bridge") {
             this.requestDesktopLaunchAfterGatewayReady();
           } else {
             console.log("[OpenCodex Gateway] Desktop is already attached to the provider bridge; gateway startup will not restart it.");
@@ -2919,9 +2934,15 @@ export class CodexBridgeServer {
 
   public stop(): Promise<void> {
     return new Promise((resolve) => {
+      // Cancel before anything else: a pending launch would otherwise restart
+      // Desktop after the gateway that scheduled it had already gone away.
+      if (this.desktopLaunchTimer) {
+        clearTimeout(this.desktopLaunchTimer);
+        this.desktopLaunchTimer = null;
+      }
       if (this.registeredProviderBridge) {
         this.registeredProviderBridge = false;
-        unregisterProviderBridgeEnvironment();
+        this.desktop.unregisterProviderBridgeEnvironment();
       }
       if (this.server) {
         this.server.close(() => {

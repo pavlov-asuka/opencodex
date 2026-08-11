@@ -148,42 +148,51 @@ test("third-party models are eligible as Codex subagents", async () => {
   assert.equal(entry.multi_agent_version, "v2");
 });
 
-test("a gateway that loses the port race cannot detach the running one", () => {
-  const source = readFileSync(fileURLToPath(new URL("../src_v2/server/gateway.ts", import.meta.url)), "utf8");
+test("a gateway that loses the port race cannot detach the running one", async () => {
+  // Previously asserted by regex over gateway.ts, which pinned the call's
+  // spelling rather than its effect and broke the moment the call moved behind
+  // an injected controller. Drive the real race instead.
+  const { CodexBridgeServer } = await import("../dist/server/gateway.js");
+  const { createRecordingDesktopController } = await import("../dist/platform/index.js");
+  const { mkdtemp: makeTempDir, rm: removeDir } = await import("node:fs/promises");
+  const { tmpdir: temporaryDir } = await import("node:os");
 
-  // Registration must happen inside the listen callback. When it ran before
-  // listen(), a second gateway would publish its own CODEX_CLI_PATH, fail with
-  // EADDRINUSE, and then unregister on the way out — leaving the healthy
-  // instance's Desktop pointed at variables that no longer existed.
-  const listenAt = source.indexOf('this.server.listen(this.port, "127.0.0.1"');
-  assert.ok(listenAt >= 0, "listen call must exist");
-  assert.ok(
-    source.indexOf("registerProviderBridgeEnvironment(this.port)", listenAt) > listenAt,
-    "startup must publish the bridge environment inside the listen callback",
-  );
+  const dataDir = await makeTempDir(join(temporaryDir(), "opencodex-race-"));
+  const previousDataDir = process.env.OPENCODEX_DATA_DIR;
+  const previousConfigPath = process.env.OPENCODEX_CODEX_CONFIG_PATH;
+  process.env.OPENCODEX_DATA_DIR = dataDir;
+  process.env.OPENCODEX_CODEX_CONFIG_PATH = join(dataDir, "config.toml");
 
-  // Other call sites may republish — a settings change has to reach the bridge
-  // — but only for an instance that already owns the port. An unguarded call
-  // anywhere would let a losing instance overwrite a healthy one's variables.
-  // The startup call is the one whose return value decides ownership; it is
-  // identified by that shape rather than by distance from the listen call.
-  const startupCall = source.indexOf("if (registerProviderBridgeEnvironment(this.port)) {");
-  assert.ok(startupCall > listenAt, "the ownership-deciding registration must sit inside the listen callback");
+  const winnerDesktop = createRecordingDesktopController();
+  const loserDesktop = createRecordingDesktopController();
+  const winner = new CodexBridgeServer(8937, winnerDesktop);
+  const loser = new CodexBridgeServer(8937, loserDesktop);
 
-  const calls = [...source.matchAll(/registerProviderBridgeEnvironment\(this\.port\)/g)];
-  assert.ok(calls.length >= 1);
-  for (const call of calls) {
-    if (call.index >= startupCall && call.index <= startupCall + 60) continue;
-    const preceding = source.slice(Math.max(0, call.index - 120), call.index);
-    assert.match(
-      preceding,
-      /registeredProviderBridge/,
-      `registerProviderBridgeEnvironment at index ${call.index} must be guarded by registeredProviderBridge`,
-    );
+  try {
+    await winner.start();
+    assert.ok(winnerDesktop.calls.includes("register:8937"), "the winner must publish the bridge environment");
+
+    await assert.rejects(loser.start(), /already running|already owned/);
+
+    // The whole point: the instance that lost must not have published its own
+    // CODEX_CLI_PATH, and above all must not have cleared the winner's on its
+    // way out. That left Desktop pointed at variables that no longer existed.
+    assert.deepEqual(loserDesktop.calls, [], `the loser touched the environment: ${JSON.stringify(loserDesktop.calls)}`);
+
+    // Stopping the loser must still not unregister — it never owned anything.
+    await loser.stop();
+    assert.deepEqual(loserDesktop.calls, [], "stopping a gateway that never registered must not unregister");
+
+    // And the winner's own registration survives all of it.
+    assert.ok(!winnerDesktop.calls.includes("unregister"), "the winner must still be registered");
+  } finally {
+    await winner.stop();
+    if (previousDataDir === undefined) delete process.env.OPENCODEX_DATA_DIR;
+    else process.env.OPENCODEX_DATA_DIR = previousDataDir;
+    if (previousConfigPath === undefined) delete process.env.OPENCODEX_CODEX_CONFIG_PATH;
+    else process.env.OPENCODEX_CODEX_CONFIG_PATH = previousConfigPath;
+    await removeDir(dataDir, { recursive: true, force: true });
   }
-
-  // And only the instance that registered may unregister.
-  assert.match(source, /if \(this\.registeredProviderBridge\) \{[\s\S]{0,160}unregisterProviderBridgeEnvironment\(\);/);
 });
 
 test("provider credentials can be stored on this platform", async () => {

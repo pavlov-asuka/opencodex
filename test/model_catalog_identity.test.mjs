@@ -337,12 +337,12 @@ test("Codex restart waits for the new gateway before launching the desktop", asy
   assert.ok(restartStart >= 0 && restartEnd > restartStart);
 
   const restartBlock = gateway.slice(restartStart, restartEnd);
-  assert.match(restartBlock, /requestDesktopLaunchAfterGatewayReady\(\);\s*stopDesktopClients\(\);/);
+  assert.match(restartBlock, /requestDesktopLaunchAfterGatewayReady\(\);\s*this\.desktop\.stopDesktopClients\(\);/);
   assert.ok(
-    restartBlock.indexOf("stopDesktopClients();") < restartBlock.indexOf('execFileSync("/opt/homebrew/bin/pm2", ["restart", "opencodex"]'),
+    restartBlock.indexOf("this.desktop.stopDesktopClients();") < restartBlock.indexOf('execFileSync("/opt/homebrew/bin/pm2", ["restart", "opencodex"]'),
   );
   assert.match(gateway, /this\.launchDesktopAfterGatewayReadyIfRequested\(\);\s*resolve\(\);/);
-  assert.match(gateway, /restartDesktopClients\(true\);\s*console\.log\("\[OpenCodex Gateway\] Gateway is ready; launched Desktop through the provider bridge/);
+  assert.match(gateway, /this\.restartDesktop\(true\);\s*console\.log\("\[OpenCodex Gateway\] Gateway is ready; launched Desktop through the provider bridge/);
   assert.doesNotMatch(
     gateway,
     /this\.startLivePickerOverlay\(\);\s*this\.launchDesktopAfterGatewayReadyIfRequested\(\);/,

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import { CodexBridgeServer } from "../dist/server/gateway.js";
+import { createRecordingDesktopController } from "../dist/platform/index.js";
 
 test("gateway refuses a second instance sharing the same runtime directory and port", async () => {
   const dataDir = await fs.mkdtemp(`${os.tmpdir()}/opencodex-lock-test-`);
@@ -10,8 +11,8 @@ test("gateway refuses a second instance sharing the same runtime directory and p
   const previousConfigPath = process.env.OPENCODEX_CODEX_CONFIG_PATH;
   process.env.OPENCODEX_DATA_DIR = dataDir;
   process.env.OPENCODEX_CODEX_CONFIG_PATH = `${dataDir}/config.toml`;
-  const first = new CodexBridgeServer(8801);
-  const second = new CodexBridgeServer(8801);
+  const first = new CodexBridgeServer(8801, createRecordingDesktopController());
+  const second = new CodexBridgeServer(8801, createRecordingDesktopController());
 
   try {
     await first.start();

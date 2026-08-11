@@ -8,6 +8,7 @@ import http from "node:http";
 import os from "node:os";
 import fs from "node:fs/promises";
 import { CodexBridgeServer } from "../dist/server/gateway.js";
+import { createRecordingDesktopController } from "../dist/platform/index.js";
 
 test("V2 server starts and answers healthcheck cleanly", async () => {
   const dataDir = await fs.mkdtemp(`${os.tmpdir()}/opencodex-v2-test-`);
@@ -15,7 +16,9 @@ test("V2 server starts and answers healthcheck cleanly", async () => {
   const previousConfigPath = process.env.OPENCODEX_CODEX_CONFIG_PATH;
   process.env.OPENCODEX_DATA_DIR = dataDir;
   process.env.OPENCODEX_CODEX_CONFIG_PATH = `${dataDir}/config.toml`;
-  const server = new CodexBridgeServer(8799);
+  // Injected: without it, start() publishes CODEX_CLI_PATH into the real
+  // HKCU\Environment and stop() deletes all six bridge variables.
+  const server = new CodexBridgeServer(8799, createRecordingDesktopController());
   await server.start();
 
   try {

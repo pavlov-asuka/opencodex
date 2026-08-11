@@ -211,5 +211,13 @@ export async function fetchUpstream(rawTarget: string, options: UpstreamFetchOpt
 }
 
 export async function closeUpstreamDispatcher(): Promise<void> {
-  await upstreamAgent.close();
+  // The agent is shared per process, so a second gateway stopping in the same
+  // process finds it already destroyed. undici answers that with a rejected
+  // ClientDestroyedError, which propagated out of stop() and made shutdown
+  // fail for reasons unrelated to shutdown.
+  try {
+    await upstreamAgent.close();
+  } catch (error: any) {
+    if (error?.code !== "UND_ERR_DESTROYED") throw error;
+  }
 }
