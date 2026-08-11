@@ -163,6 +163,14 @@ rl.on("line", (line) => { void handleLine(line); });
 
   const seen = [];
   const gateway = http.createServer((req, res) => {
+    // The bridge locates the gateway by identity now, not by the port number
+    // it inherited, so a stand-in has to answer /health the way the real one
+    // does or it will not be found.
+    if (req.url === "/health") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ status: "ok", name: "CodexBridge Engine V2", opencodex: true }));
+      return;
+    }
     const chunks = [];
     req.on("data", (chunk) => chunks.push(chunk));
     req.on("end", () => {

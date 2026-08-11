@@ -12,6 +12,7 @@
 
 import fs from "node:fs";
 import http from "node:http";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
@@ -394,6 +395,82 @@ function configuredGatewayPort(): number {
   return 8765;
 }
 
+/**
+ * Ask a port whether it is the OpenCodex gateway.
+ *
+ * A raw socket rather than fetch(): a listener that accepts the connection and
+ * then says nothing has to time out here, and only the socket timeout is
+ * guaranteed to fire for that.
+ */
+function portIsGateway(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ port, host: "127.0.0.1" });
+    let received = "";
+    let settled = false;
+    const settle = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(value);
+    };
+    socket.setTimeout(1200);
+    socket.once("error", () => settle(false));
+    socket.once("timeout", () => settle(false));
+    socket.once("connect", () => socket.write(`GET /health HTTP/1.0\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`));
+    socket.on("data", (chunk) => {
+      received += chunk.toString("utf-8");
+      if (received.includes("CodexBridge Engine V2")) settle(true);
+      else if (received.length > 8192) settle(false);
+    });
+    socket.once("close", () => settle(received.includes("CodexBridge Engine V2")));
+  });
+}
+
+/** Ports a gateway may be on, most likely first. */
+function gatewayPortCandidates(): number[] {
+  const ports: number[] = [configuredGatewayPort()];
+  // The gateway names its lock file after the port it actually bound.
+  try {
+    for (const entry of fs.readdirSync(path.join(os.homedir(), ".opencodex"))) {
+      const match = entry.match(/^gateway-(\d+)\.lock$/);
+      const port = match ? Number.parseInt(match[1], 10) : NaN;
+      if (Number.isInteger(port) && port > 0 && !ports.includes(port)) ports.push(port);
+    }
+  } catch {}
+  for (let port = 8765; port < 8775; port += 1) {
+    if (!ports.includes(port)) ports.push(port);
+  }
+  return ports;
+}
+
+let cachedGatewayPort: number | null = null;
+
+/**
+ * Find the port the gateway is actually on.
+ *
+ * The inherited OPENCODEX_GATEWAY_PORT is a snapshot from whenever Codex
+ * Desktop launched. If the gateway later moved — it steps aside when another
+ * program owns the default port — that value points at a stranger or at
+ * nothing, and every routed turn fails with an unreachable upstream. Verify
+ * identity instead of trusting the number.
+ */
+export async function resolveGatewayPort(): Promise<number> {
+  if (cachedGatewayPort !== null && await portIsGateway(cachedGatewayPort)) return cachedGatewayPort;
+  for (const port of gatewayPortCandidates()) {
+    if (await portIsGateway(port)) {
+      if (port !== configuredGatewayPort()) {
+        console.error(`[OpenCodex Native Egress] gateway found on port ${port}, not the inherited ${configuredGatewayPort()}`);
+      }
+      cachedGatewayPort = port;
+      return port;
+    }
+  }
+  // Nothing answered. Keep the configured port so the failure names the port
+  // the user expects to see.
+  cachedGatewayPort = null;
+  return configuredGatewayPort();
+}
+
 function nativeEgressPath(pathname: string, basePath = "/v1"): string {
   const pathValue = pathname || "/";
   if (basePath !== "/v1") {
@@ -409,10 +486,10 @@ function nativeUpstreamTarget(pathname: string, search: string, basePath: string
   return `https://chatgpt.com/backend-api/codex${nativeEgressPath(pathname, basePath)}${search}`;
 }
 
-function gatewayUpstreamTarget(pathname: string, search: string, basePath: string): string {
+function gatewayUpstreamTarget(pathname: string, search: string, basePath: string, port: number): string {
   const pathValue = nativeEgressPath(pathname, basePath);
   const gatewayPath = pathValue === "/" || pathValue.startsWith("/v1/") ? pathValue : `/v1${pathValue}`;
-  return `http://127.0.0.1:${configuredGatewayPort()}${gatewayPath}${search}`;
+  return `http://127.0.0.1:${port}${gatewayPath}${search}`;
 }
 
 function readRequestBody(req: http.IncomingMessage): Promise<Buffer> {
@@ -524,10 +601,22 @@ async function proxyNativeEgressRequest(
       attempts: error?.attempts,
     });
     if (!res.headersSent) {
+      // Name the upstream that actually failed. Without it the client only
+      // sees the local egress URL and cannot tell "chatgpt.com is unreachable"
+      // (a network problem) from "the local gateway is not there" (OpenCodex
+      // is not running, or moved to another port).
+      const upstream = (() => {
+        try { const parsed = new URL(targetUrl); return `${parsed.protocol}//${parsed.host}`; } catch { return targetUrl; }
+      })();
+      const local = upstream.includes("127.0.0.1") || upstream.includes("localhost");
       res.writeHead(502, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
-        error: error?.message || "native egress request failed",
+        error: `${error?.message || "native egress request failed"} (upstream ${upstream})`,
         type: "upstream_unreachable",
+        upstream,
+        hint: local
+          ? "The OpenCodex gateway did not answer. Check that OpenCodex.exe is running, then restart Codex Desktop so it picks up the gateway port."
+          : "ChatGPT was not reachable. This turn never touched OpenCodex; check the network, VPN or proxy.",
         retryable: Boolean(error?.retryable),
         attempts: error?.attempts,
         cause_code: details.code,
@@ -572,9 +661,9 @@ async function handleNativeEgressRequest(
   }
   const route = nativeEgressRoute(parsedBody, req.headers);
   const targetUrl = route === "gateway"
-    ? gatewayUpstreamTarget(requestUrl.pathname, requestUrl.search, basePath)
+    ? gatewayUpstreamTarget(requestUrl.pathname, requestUrl.search, basePath, await resolveGatewayPort())
     : nativeUpstreamTarget(requestUrl.pathname, requestUrl.search, basePath);
-  console.error(`[OpenCodex Native Egress] ${route} ${endpoint}`);
+  console.error(`[OpenCodex Native Egress] ${route} ${endpoint} -> ${targetUrl.replace(/\?.*$/, "")}`);
   await proxyNativeEgressRequest(
     req,
     res,
