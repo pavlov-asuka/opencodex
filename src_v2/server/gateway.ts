@@ -272,6 +272,43 @@ function catalogModelSlug(model: any): string {
   return String(model?.slug || model?.model || model?.id || "").trim();
 }
 
+/**
+ * Replace a provider's catalog entries with exactly the models it now has.
+ *
+ * Extracted from the /api/providers handler so the "A,B becomes B,C" case can
+ * be tested at all. The removal step used to keep the wrong half: for an entry
+ * this provider owned it returned `!desiredSlugs.has(...)`, deleting the
+ * models still selected and preserving the ones just dropped. The upsert below
+ * then re-added the selected models, so the net effect was that removed models
+ * lived forever — offered in the Codex model menu and failing when chosen.
+ */
+export function rebuildProviderCatalogModels(
+  catalog: any,
+  ownerName: string,
+  selectedModels: string[],
+  modelProtocols: Record<string, ModelProtocol> = {},
+  provider: any = "",
+): void {
+  if (!Array.isArray(catalog?.models)) catalog.models = [];
+  catalog.models = catalog.models.filter((entry: any) => catalogModelOwner(entry) !== ownerName);
+
+  for (const modelStr of Array.isArray(selectedModels) ? selectedModels : []) {
+    const { slug, backendModel } = splitConfiguredModel(modelStr);
+    if (!slug) continue;
+    const capabilities = CatalogSyncService.getKnownModelMetadata(provider, backendModel)
+      || CatalogSyncService.getKnownModelMetadata(provider, slug);
+    upsertProviderCatalogModel(
+      catalog,
+      slug,
+      backendModel,
+      slug,
+      ownerName,
+      modelProtocols[slug] || "chat",
+      capabilities,
+    );
+  }
+}
+
 export function hasThirdPartyModels(providers: ProviderConfig[] = [], catalog: any = {}): boolean {
   const providerHasModels = (Array.isArray(providers) ? providers : []).some((provider: any) =>
     [provider?.models, provider?.selected_models, provider?.active_models]
@@ -2441,36 +2478,7 @@ export class CodexBridgeServer {
               migrateProviderCatalogOwner(catalog, previousProviderName, resolvedProviderName);
               preserveOfficialModels(catalog);
 
-              const desiredSlugs = new Set<string>();
-              for (const modelStr of selectedModels) {
-                const separator = modelStr.includes("=") ? "=" : (modelStr.includes("->") ? "->" : "");
-                const parts = separator ? modelStr.split(separator) : [modelStr];
-                for (const part of parts) {
-                  const value = String(part || "").trim().toLowerCase();
-                  if (value) desiredSlugs.add(value);
-                }
-              }
-              catalog.models = catalog.models.filter((entry: any) => {
-                if (catalogModelOwner(entry) !== resolvedProviderName) return true;
-                return ![entry.slug, entry.model, entry.backend_model]
-                  .filter(Boolean)
-                  .some((value: any) => desiredSlugs.has(String(value).trim().toLowerCase()));
-              });
-
-              for (const modelStr of selectedModels) {
-                const { slug, backendModel } = splitConfiguredModel(modelStr);
-                const capabilities = CatalogSyncService.getKnownModelMetadata(provider, backendModel)
-                  || CatalogSyncService.getKnownModelMetadata(provider, slug);
-                upsertProviderCatalogModel(
-                  catalog,
-                  slug,
-                  backendModel,
-                  slug,
-                  resolvedProviderName,
-                  selectedModelProtocols[slug] || "chat",
-                  capabilities,
-                );
-              }
+              rebuildProviderCatalogModels(catalog, resolvedProviderName, selectedModels, selectedModelProtocols, provider);
 
               preserveOfficialModels(catalog);
               fs.writeFileSync(catalogPath, JSON.stringify(catalog, null, 2), "utf-8");
