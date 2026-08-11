@@ -1712,11 +1712,77 @@ export class CodexBridgeServer {
     }
   }
 
+  /**
+   * Is anything listening on this port, and is it us?
+   *
+   * A bare TCP connect only proves the port is taken. The gateway must tell
+   * its own instance apart from an unrelated program: the first case means
+   * "already running, do nothing", the second means "find another port".
+   */
+  private inspectPort(port: number): Promise<"free" | "ours" | "foreign"> {
+    // A raw socket rather than fetch(): a listener that accepts the connection
+    // and then says nothing must time out here, and only the socket timeout is
+    // guaranteed to fire for that case.
+    return new Promise((resolve) => {
+      const socket = net.createConnection({ port, host: "127.0.0.1" });
+      let received = "";
+      let settled = false;
+      const settle = (value: "free" | "ours" | "foreign") => {
+        if (settled) return;
+        settled = true;
+        socket.destroy();
+        resolve(value);
+      };
+      socket.setTimeout(1200);
+      socket.once("error", () => settle("free"));
+      socket.once("timeout", () => settle("foreign"));
+      socket.once("connect", () => {
+        socket.write(`GET /health HTTP/1.0\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`);
+      });
+      socket.on("data", (chunk) => {
+        received += chunk.toString("utf-8");
+        if (received.includes("CodexBridge Engine V2")) settle("ours");
+        else if (received.length > 8192) settle("foreign");
+      });
+      socket.once("close", () => settle(received.includes("CodexBridge Engine V2") ? "ours" : "foreign"));
+    });
+  }
+
+  /**
+   * Pick the port to listen on.
+   *
+   * An explicitly configured port is honoured or refused — never silently
+   * changed, because the user chose it. The default may step aside for an
+   * unrelated program so that a machine which already uses 8765 still works.
+   */
+  private async resolvePort(): Promise<number> {
+    const explicit = Boolean(String(process.env.OPENCODEX_PORT || process.env.PORT || "").trim());
+    const state = await this.inspectPort(this.port);
+    if (state === "free") return this.port;
+    if (state === "ours") {
+      throw new Error(`An OpenCodex gateway is already running on port ${this.port}.`);
+    }
+    if (explicit) {
+      throw new Error(
+        `Port ${this.port} is held by another program. Set OPENCODEX_PORT to a free port, or stop that program.`,
+      );
+    }
+    for (let candidate = this.port + 1; candidate < this.port + 10; candidate += 1) {
+      if (await this.inspectPort(candidate) === "free") {
+        console.warn(`[CodexBridge V2] Port ${this.port} is in use by another program; using ${candidate} instead.`);
+        return candidate;
+      }
+    }
+    throw new Error(`Port ${this.port} is in use and no free port was found in the following ten.`);
+  }
+
   public async start(overridePort?: number): Promise<void> {
 
     if (overridePort && typeof overridePort === "number") {
       this.port = overridePort;
     }
+    // Resolve before the lock: the lock file is named after the port.
+    this.port = await this.resolvePort();
     this.acquireServerLock();
     const configPath = codexConfigPath();
     let managedConfig = "";
@@ -1817,7 +1883,7 @@ export class CodexBridgeServer {
         // 1. Handshake / Healthcheck & Dashboard UI
         if (req.method === "GET" && url.pathname === "/health") {
           res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ status: "ok", name: "CodexBridge Engine V2", version: "2.0.0", opencodex: true }));
+          res.end(JSON.stringify({ status: "ok", name: "CodexBridge Engine V2", version: "2.0.1", opencodex: true }));
           return;
         }
 

@@ -25,8 +25,11 @@
 
 ## 快速开始
 
+前提:已安装 Codex Desktop(MSIX 包 `OpenAI.Codex`)—— Node 运行时和原生 codex.exe 都从它那里取。
+
 1. 从 [Releases](https://github.com/pavlov-asuka/opencodex/releases/latest) 下载 zip,解压到任意位置
 2. 双击 **`OpenCodex.exe`** —— 它会启动网关并打开控制台 `http://127.0.0.1:8765`
+   (两个可执行文件都**没有代码签名**,首次运行 Windows 会弹"已保护你的电脑",点"更多信息 → 仍要运行")
 3. 在控制台填 API Key、加模型、应用
 4. 重启 Codex Desktop,第三方模型即出现在模型选择器中
 
@@ -95,7 +98,7 @@ TOML 转义修复与平台无关,已提交给上游项目:[AITabby/codexsplit#37
 | `OPENCODEX_AGENT_MESSAGE_ORACLE` | 关闭 | 恢复加密的子代理任务载荷(见下) |
 | `OPENCODEX_AGENT_MESSAGE_ORACLE_MODEL` | `gpt-5.6-sol` | 用于提取的模型 |
 | `OPENCODEX_AGENT_MESSAGE_ORACLE_TIMEOUT_MS` | `60000` | 提取超时 |
-| `OPENCODEX_PORT` | `8765` | 网关端口 |
+| `OPENCODEX_PORT` | `8765` | 网关端口。**不设**时,若 8765 已被别的程序占用,网关会自动顺延到下一个空闲端口(最多试 10 个)并把新端口写进 Codex 配置;**显式设置**时端口被占用会直接报错而不是偷偷换 |
 | `OPENCODEX_WINDOWS_LAUNCH_MODE` | `shell` | `direct` 绕过 shell 激活启动 Desktop |
 | `OPENCODEX_MULTI_AGENT_VERSION` | `v2` | 写入模型目录的多 Agent 协议版本 |
 | `OPENCODEX_DEBUG_REQUEST_DUMP` | 关闭 | 记录发往服务商请求的目录(诊断用) |

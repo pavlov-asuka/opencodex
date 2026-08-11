@@ -16,6 +16,7 @@
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
+use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -76,9 +77,50 @@ fn configured_port(overrides: &[(String, String)]) -> u16 {
         .unwrap_or(DEFAULT_PORT)
 }
 
-fn gateway_is_up(port: u16) -> bool {
+/// What, if anything, answers on a port.
+#[derive(PartialEq, Clone, Copy)]
+enum Probe {
+    /// Our gateway: it identified itself on /health.
+    Ours,
+    /// Something is listening, but it is not us.
+    Foreign,
+    /// Nothing is listening.
+    Closed,
+}
+
+/// Identify the listener rather than trusting a bare TCP connect.
+///
+/// A successful connect only proves *something* holds the port. Treating that
+/// as "the gateway is already running" meant that when any other program owned
+/// 8765, the launcher started nothing and pointed the browser at that program.
+fn probe(port: u16) -> Probe {
     let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
-    TcpStream::connect_timeout(&address.into(), Duration::from_millis(500)).is_ok()
+    let Ok(mut stream) = TcpStream::connect_timeout(&address.into(), Duration::from_millis(500)) else {
+        return Probe::Closed;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(1500)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(1500)));
+    let request = format!("GET /health HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    if stream.write_all(request.as_bytes()).is_err() {
+        return Probe::Foreign;
+    }
+    let mut response = Vec::new();
+    // The health body is tiny; cap the read so a chatty stranger cannot stall us.
+    let mut buffer = [0u8; 2048];
+    while let Ok(read) = stream.read(&mut buffer) {
+        if read == 0 {
+            break;
+        }
+        response.extend_from_slice(&buffer[..read]);
+        if response.len() > 8192 {
+            break;
+        }
+    }
+    if String::from_utf8_lossy(&response).contains("CodexBridge Engine V2") {
+        Probe::Ours
+    } else {
+        Probe::Foreign
+    }
 }
 
 /// Find a Node runtime, preferring one shipped with the app and falling back to
@@ -130,15 +172,34 @@ fn start_gateway(root: &Path, overrides: &[(String, String)]) -> Result<(), Stri
         .map_err(|error| format!("could not start the gateway: {error}"))
 }
 
-fn wait_for_gateway(port: u16) -> bool {
+/// Ports the gateway may end up on: the configured one first, then the range it
+/// falls back through when the default is taken by another program.
+fn candidate_ports(configured: u16) -> Vec<u16> {
+    let mut ports = vec![configured];
+    for port in DEFAULT_PORT..DEFAULT_PORT + 10 {
+        if !ports.contains(&port) {
+            ports.push(port);
+        }
+    }
+    ports
+}
+
+/// Find a port our gateway actually answers on.
+fn find_our_gateway(configured: u16) -> Option<u16> {
+    candidate_ports(configured)
+        .into_iter()
+        .find(|port| probe(*port) == Probe::Ours)
+}
+
+fn wait_for_gateway(configured: u16) -> Option<u16> {
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     while Instant::now() < deadline {
-        if gateway_is_up(port) {
-            return true;
+        if let Some(port) = find_our_gateway(configured) {
+            return Some(port);
         }
         sleep(Duration::from_millis(400));
     }
-    false
+    None
 }
 
 fn open_dashboard(port: u16) {
@@ -181,25 +242,50 @@ fn main() {
     let overrides = load_env_file(&root);
     let port = configured_port(&overrides);
 
-    if !gateway_is_up(port) {
+    // Already running? Only our own gateway counts.
+    let mut live = find_our_gateway(port);
+
+    if live.is_none() {
+        let occupied_by_stranger = probe(port) == Probe::Foreign;
         if let Err(error) = start_gateway(&root, &overrides) {
-            if !background {
-                report(&error);
-            }
-            exit(1);
+            fail(&root, background, &error);
         }
-        if !wait_for_gateway(port) {
-            if !background {
-                report(&format!(
-                    "The OpenCodex gateway did not come up on port {port} within {} seconds.",
+        live = wait_for_gateway(port);
+        if live.is_none() {
+            let detail = if occupied_by_stranger {
+                format!(
+                    "Port {port} is held by another program, and the gateway did not come up on a \
+                     fallback port within {} seconds.\n\n\
+                     Close whatever is using port {port}, or set OPENCODEX_PORT in opencodex.env \
+                     to a free port.",
                     STARTUP_TIMEOUT.as_secs()
-                ));
-            }
-            exit(1);
+                )
+            } else {
+                format!(
+                    "The OpenCodex gateway did not come up within {} seconds.\n\n\
+                     Run Start-OpenCodex.cmd to see what it prints.",
+                    STARTUP_TIMEOUT.as_secs()
+                )
+            };
+            fail(&root, background, &detail);
         }
     }
 
     if !background {
-        open_dashboard(port);
+        open_dashboard(live.unwrap_or(port));
     }
+}
+
+/// Report a startup failure and stop.
+///
+/// Double-clicking a windows-subsystem binary swallows everything, so the
+/// reason is also written beside the executable — without it a user has
+/// nothing to look at and nothing to send.
+fn fail(root: &Path, background: bool, message: &str) -> ! {
+    let log = root.join("opencodex-launcher.log");
+    let _ = fs::write(&log, format!("{message}\n"));
+    if !background {
+        report(&format!("{message}\n\nWritten to: {}", log.display()));
+    }
+    exit(1)
 }
