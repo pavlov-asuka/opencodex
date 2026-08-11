@@ -163,7 +163,14 @@ async function main() {
   if (!existsSync(bridgeExe)) throw new Error(`missing ${bridgeExe}`);
 
   console.log("Staging distribution...");
-  await cp(path.join(repoRoot, "dist"), path.join(stageDir, "dist"), { recursive: true });
+  await cp(path.join(repoRoot, "dist"), path.join(stageDir, "dist"), {
+    recursive: true,
+    // Ship what the app runs, not what building it produced. Declarations and
+    // source maps are for developing against this tree, and the extensionless
+    // bridge launcher is the POSIX shim — Windows spawns the .exe.
+    filter: (source) => !/\.(d\.ts|js\.map)$/.test(source)
+      && path.basename(source) !== "codex-provider-bridge",
+  });
 
   // A production-only manifest keeps the portable tree free of build tooling.
   const manifest = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf-8"));

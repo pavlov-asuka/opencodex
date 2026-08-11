@@ -147,7 +147,7 @@ npm run package:windows    # 生成 build/OpenCodex-win-x64 和 zip
 npm test                   # 全量测试
 ```
 
-当前:**171 通过 / 0 失败**。
+当前:**173 通过 / 0 失败**。
 
 ### 主要文件
 
@@ -167,7 +167,7 @@ npm test                   # 全量测试
 
 本项目起源于 [AITabby/opencodex](https://github.com/AITabby/codexsplit)(现已更名 CodexSplit)的一个 Fork,补上了上游公开仓库里完全缺失的 Windows 平台层。
 
-自 v1.2.0 起独立演进,并做了一次大幅精简:语音编排、GPT-Live、其他 CLI 的订阅导入(Cursor / Claude / Grok / Antigravity)、子代理决策路由、iOS 伴侣应用、macOS 应用外壳全部物理删除,代码量从 61,000 行降到约 18,000 行。改造过程、每期的取舍与风险记录在 [docs/SLIM_PLAN.md](docs/SLIM_PLAN.md);改造前的完整状态保留在 `pre-slim` tag 与 `archive/upstream-features` 分支。
+自 v1.2.0 起独立演进,并做了一次大幅精简:语音编排、GPT-Live、其他 CLI 的订阅导入(Cursor / Claude / Grok / Antigravity)、子代理决策路由、iOS 伴侣应用、macOS 应用外壳全部物理删除,代码量从 61,000 行降到约 18,000 行,打包体积从 166 MB 降到 3.1 MB(zip 1.1 MB),运行时依赖从 7 个减到 1 个。改造过程、每期的取舍与风险记录在 [docs/SLIM_PLAN.md](docs/SLIM_PLAN.md);改造前的完整状态保留在 `pre-slim` tag 与 `archive/upstream-features` 分支。
 
 ## 致谢
 
@@ -195,4 +195,4 @@ It also fixes a bug that breaks Codex for **every** Windows user: the model cata
 
 **Known limitation:** multi-agent v2 delivers a subagent's task inside an `encrypted_content` block readable only by the ChatGPT backend, so third-party children receive an empty task ([openai/codex#32031](https://github.com/openai/codex/issues/32031)). Set `OPENCODEX_AGENT_MESSAGE_ORACLE=1` to recover it through your own Codex credentials, at the cost of one extra ChatGPT request per task.
 
-Tests: 171 passing.
+Tests: 173 passing.
