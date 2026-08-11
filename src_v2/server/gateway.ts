@@ -26,6 +26,7 @@ import { SubagentOrchestrator } from "../services/subagent_orchestrator.js";
 import { agentMessageOracleEnabled, hasEncryptedAgentMessage, resolveEncryptedAgentMessages } from "../services/agent_message_oracle.js";
 import {
   codexConfigPath,
+  codexHomePath,
   desktopController,
   nativeCodexExecutablePath,
   providerBridgePath,
@@ -715,20 +716,75 @@ function normalizeStoredFunctionCallId(record: any): boolean {
   return true;
 }
 
+export interface RolloutRepairSummary {
+  /** Rollout files examined. */
+  inspected: number;
+  /** Files carrying proof this gateway wrote into them. */
+  owned: number;
+  /** Owned files that needed a change (and got one, unless dryRun). */
+  repaired: number;
+  /** Files left untouched: no provenance, or unreadable. */
+  skipped: number;
+  /** Owned files that needed a change but could not be written. */
+  failed: number;
+}
+
 /**
- * Remove only gateway-created reasoning records before native mode resumes.
+ * Did this gateway write into this rollout?
+ *
+ * The only honest evidence is a record carrying an id this gateway itself
+ * mints. Everything else — a reasoning id that merely looks unfamiliar, a
+ * function_call id in an unexpected shape — is just as likely to be a Codex
+ * version we have not seen, or another tool's session.
+ *
+ * Without this gate the repair walked every file under ~/.codex and rewrote
+ * anything it did not recognize, including sessions that never went near
+ * OpenCodex.
+ */
+function rolloutHasGatewayProvenance(records: any[]): boolean {
+  return records.some(isGatewayReasoningItem);
+}
+
+/**
+ * Replace a rollout without risking the original.
+ *
+ * The previous version wrote straight over the file, so a crash, a full disk
+ * or an antivirus interception left a truncated session. Session history
+ * cannot be regenerated, so keep a copy and swap by rename.
+ */
+function writeRolloutAtomically(rolloutPath: string, contents: string): void {
+  const directory = path.dirname(rolloutPath);
+  const temporaryPath = path.join(directory, `.${path.basename(rolloutPath)}.${process.pid}.tmp`);
+  fs.copyFileSync(rolloutPath, `${rolloutPath}.opencodex-backup`);
+  try {
+    fs.writeFileSync(temporaryPath, contents, "utf-8");
+    fs.renameSync(temporaryPath, rolloutPath);
+  } catch (error) {
+    try { fs.unlinkSync(temporaryPath); } catch {}
+    throw error;
+  }
+}
+
+/**
+ * Remove gateway-created reasoning records before native mode resumes.
+ *
  * Native Responses reasoning records carry server-managed encrypted content;
  * deleting those would damage a normal GPT rollout, so the V2 pattern also
- * requires the null encrypted_content that this gateway emitted.
+ * requires the null encrypted_content that this gateway emitted. Within a
+ * rollout we can prove is ours, records the native backend would reject are
+ * removed too — that is the point of the repair. Outside such a rollout,
+ * nothing is touched at all.
  */
-function repairNativeRollouts(): number {
+export function repairNativeRollouts(options: { dryRun?: boolean } = {}): RolloutRepairSummary {
   const roots = [
-    path.join(os.homedir(), ".codex", "sessions"),
-    path.join(os.homedir(), ".codex", "archived_sessions"),
+    path.join(codexHomePath(), "sessions"),
+    path.join(codexHomePath(), "archived_sessions"),
   ];
-  let repaired = 0;
+  const summary: RolloutRepairSummary = { inspected: 0, owned: 0, repaired: 0, skipped: 0, failed: 0 };
 
   for (const rolloutPath of roots.flatMap(listRolloutFiles)) {
+    summary.inspected++;
+
     let records: any[];
     try {
       records = fs.readFileSync(rolloutPath, "utf-8")
@@ -736,8 +792,17 @@ function repairNativeRollouts(): number {
         .filter(Boolean)
         .map((line) => JSON.parse(line));
     } catch {
+      // An unparseable rollout is somebody else's format, or already damaged.
+      // Either way, rewriting it can only make things worse.
+      summary.skipped++;
       continue;
     }
+
+    if (!rolloutHasGatewayProvenance(records)) {
+      summary.skipped++;
+      continue;
+    }
+    summary.owned++;
 
     let changed = false;
     for (const record of records) {
@@ -753,18 +818,26 @@ function repairNativeRollouts(): number {
     });
     if (!changed) continue;
 
+    if (options.dryRun) {
+      summary.repaired++;
+      continue;
+    }
+
     try {
-      fs.writeFileSync(rolloutPath, `${sanitized.map((record) => JSON.stringify(record)).join("\n")}\n`, "utf-8");
-      repaired++;
+      writeRolloutAtomically(rolloutPath, `${sanitized.map((record) => JSON.stringify(record)).join("\n")}\n`);
+      summary.repaired++;
     } catch (error: any) {
+      summary.failed++;
       console.error(`[OpenCodex V2] Could not repair native rollout ${rolloutPath}: ${error.message}`);
     }
   }
 
-  if (repaired > 0) {
-    console.log(`[OpenCodex V2] Repaired ${repaired} native rollout(s) before switching off the gateway.`);
-  }
-  return repaired;
+  console.log(
+    `[OpenCodex V2] Rollout repair${options.dryRun ? " (dry run)" : ""}: `
+    + `${summary.inspected} inspected, ${summary.owned} ours, ${summary.repaired} repaired, `
+    + `${summary.skipped} left untouched, ${summary.failed} failed.`,
+  );
+  return summary;
 }
 
 export class CodexBridgeServer {
@@ -2826,12 +2899,14 @@ export class CodexBridgeServer {
             // bridge no matter what the config says.
             this.desktop.unregisterProviderBridgeEnvironment();
             this.registeredProviderBridge = false;
-            repairNativeRollouts();
+            const rollouts = repairNativeRollouts();
             this.restartDesktop(true);
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({
               status: "success",
-              message: "Codex 已脱离 OpenCodex：环境变量已注销、托管配置已移除、Desktop 正在重启。第三方模型与凭据都保留，重新启动网关即可恢复。",
+              rollouts,
+              message: "Codex 已脱离 OpenCodex：环境变量已注销、托管配置已移除、Desktop 正在重启。第三方模型与凭据都保留，重新启动网关即可恢复。"
+                + `会话修复：检查 ${rollouts.inspected} 个，改写 ${rollouts.repaired} 个（原文件已留 .opencodex-backup 备份），其余 ${rollouts.skipped} 个未改动。`,
             }));
           } catch (err: any) {
             res.writeHead(500, { "Content-Type": "application/json" });
@@ -2866,7 +2941,7 @@ export class CodexBridgeServer {
             // Third-party V2 responses used to emit local rs_* reasoning items.
             // Remove those persisted records before the native desktop client
             // sends this thread back to chatgpt.com.
-            repairNativeRollouts();
+            const rollouts = repairNativeRollouts();
 
             // Without this the Desktop keeps launching the bridge even though
             // the managed config is gone, so "restore native" was never a
@@ -2877,7 +2952,7 @@ export class CodexBridgeServer {
             this.restartDesktop(true);
 
             res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ status: "success", gateway_active: false }));
+            res.end(JSON.stringify({ status: "success", gateway_active: false, rollouts }));
           } catch (err: any) {
             res.writeHead(500, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: err.message }));
