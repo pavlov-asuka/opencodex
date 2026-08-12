@@ -168,8 +168,14 @@ async function main() {
     // Ship what the app runs, not what building it produced. Declarations and
     // source maps are for developing against this tree, and the extensionless
     // bridge launcher is the POSIX shim — Windows spawns the .exe.
+    //
+    // OpenCodex.exe is excluded here and copied to the folder root below.
+    // Shipping both put two byte-identical 271 KB launchers in the package,
+    // and the one under dist/ is referenced by nothing: the Rust launcher
+    // resolves only dist/server.js and dist/node.exe.
     filter: (source) => !/\.(d\.ts|js\.map)$/.test(source)
-      && path.basename(source) !== "codex-provider-bridge",
+      && path.basename(source) !== "codex-provider-bridge"
+      && path.basename(source) !== "OpenCodex.exe",
   });
 
   // A production-only manifest keeps the portable tree free of build tooling.
@@ -194,14 +200,15 @@ async function main() {
   run(process.execPath, [npmCliPath(), "install", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], {
     cwd: stageDir,
   });
+  // A lockfile records how this folder was built; nothing at runtime reads it.
+  await rm(path.join(stageDir, "package-lock.json"), { force: true });
 
   await writeFile(path.join(stageDir, "Start-OpenCodex.cmd"), LAUNCHER, "utf-8");
   // The way out that does not depend on anything of ours still working.
   await cp(path.join(repoRoot, "scripts", "restore-native-codex.cmd"), path.join(stageDir, "Restore-Native-Codex.cmd"));
   await writeFile(path.join(stageDir, "README.md"), README, "utf-8");
 
-  // The double-clickable entry point lives at the root of the folder; the copy
-  // under dist/ is what the build produced.
+  // The double-clickable entry point, and the only copy in the package.
   const appLauncher = path.join(repoRoot, "dist", "OpenCodex.exe");
   if (!existsSync(appLauncher)) throw new Error(`missing ${appLauncher}`);
   await cp(appLauncher, path.join(stageDir, "OpenCodex.exe"));
