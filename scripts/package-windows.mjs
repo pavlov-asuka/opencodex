@@ -220,9 +220,18 @@ async function main() {
   // A lockfile records how this folder was built; nothing at runtime reads it.
   await rm(path.join(stageDir, "package-lock.json"), { force: true });
 
-  await writeFile(path.join(stageDir, "Start-OpenCodex.cmd"), LAUNCHER, "utf-8");
-  // The way out that does not depend on anything of ours still working.
-  await cp(path.join(repoRoot, "scripts", "restore-native-codex.cmd"), path.join(stageDir, "Restore-Native-Codex.cmd"));
+  // cmd.exe requires CRLF. Both of these shipped LF-only: the launcher
+  // survived by luck, but Restore-Native-Codex.cmd - the escape hatch for when
+  // the gateway or bridge is what broke - exited 255 having done nothing,
+  // because the parser ate the leading characters of every line. Normalise
+  // here so the staged copy is correct whatever the checkout did.
+  const toCrlf = (text) => text.replace(/\r?\n/g, "\r\n");
+  await writeFile(path.join(stageDir, "Start-OpenCodex.cmd"), toCrlf(LAUNCHER), "utf-8");
+  await writeFile(
+    path.join(stageDir, "Restore-Native-Codex.cmd"),
+    toCrlf(await readFile(path.join(repoRoot, "scripts", "restore-native-codex.cmd"), "utf-8")),
+    "utf-8",
+  );
   await writeFile(path.join(stageDir, "README.md"), README, "utf-8");
 
   // The double-clickable entry point, and the only copy in the package.

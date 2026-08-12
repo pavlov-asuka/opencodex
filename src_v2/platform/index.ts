@@ -12,7 +12,7 @@ import { win32DesktopController } from "./win32.js";
 import type { DesktopAppServerState, DesktopController } from "./types.js";
 
 export type { DesktopAppServerState, DesktopController } from "./types.js";
-export { codexConfigPath, codexHomePath, BRIDGE_ENVIRONMENT_VARIABLES } from "./paths.js";
+export { codexConfigPath, codexHomePath, openCodexCatalogPath, BRIDGE_ENVIRONMENT_VARIABLES } from "./paths.js";
 
 /**
  * A controller that touches nothing.

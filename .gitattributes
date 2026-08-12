@@ -1,0 +1,10 @@
+# cmd.exe requires CRLF. Restore-Native-Codex.cmd shipped with LF-only endings
+# and never ran: the parser ate the first characters of each line, turning
+# `setlocal` into `ocal` and `rem` into `m`, and the script exited 255 having
+# done nothing. That is the escape hatch, so it failed exactly when it was
+# needed. Keep these files CRLF in the working tree regardless of core.autocrlf.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Everything else stays LF in the repository.
+* text=auto

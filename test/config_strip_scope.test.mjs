@@ -8,6 +8,39 @@
  * catalog or proxy endpoint.
  */
 import test from "node:test";
+
+test("an orphaned managed provider section is removed whole, not just its header", () => {
+  // The lookahead was `(?=\n\s*\[|$)` under /m, where `$` matches an end of
+  // line, so the lazy quantifier stopped at the header. The keys below it -
+  // including the gateway bearer token - were left as loose lines, silently
+  // reattached to whichever table came before. Found by running the standalone
+  // restore script's cleaning step against a config with a corrupted block.
+  const stripped = stripManagedCodexConfig([
+    'model = "gpt-5.6"',
+    "[model_providers.opencodex]",
+    'name = "OpenCodex"',
+    'base_url = "http://127.0.0.1:8765/v1"',
+    'experimental_bearer_token = "secret"',
+    "[model_providers.mine]",
+    'name = "Mine"',
+  ].join("\n"));
+
+  assert.doesNotMatch(stripped, /OpenCodex/, "no key from our section may survive");
+  assert.doesNotMatch(stripped, /secret/, "least of all the token");
+  assert.match(stripped, /\[model_providers\.mine\]/, "the next table is untouched");
+  assert.match(stripped, /name = "Mine"/);
+  assert.match(stripped, /model = "gpt-5\.6"/);
+});
+
+test("the managed section is removed when it ends the file", () => {
+  const stripped = stripManagedCodexConfig([
+    'model = "gpt-5.6"',
+    "[model_providers.opencodex]",
+    'name = "OpenCodex"',
+    'base_url = "http://127.0.0.1:8765/v1"',
+  ].join("\n"));
+  assert.equal(stripped, 'model = "gpt-5.6"');
+});
 import assert from "node:assert/strict";
 import { stripManagedCodexConfig, buildManagedCodexConfig } from "../dist/server/gateway.js";
 

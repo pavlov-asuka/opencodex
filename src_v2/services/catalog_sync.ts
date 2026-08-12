@@ -6,7 +6,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { codexHomePath } from "../platform/paths.js";
+import { codexHomePath, openCodexCatalogPath } from "../platform/paths.js";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
 import { ProviderConfig } from "../core/types.js";
@@ -643,7 +643,7 @@ export function findModelRegistryMatch(payload: any, provider: any, modelSlug: s
 }
 
 export class CatalogSyncService {
-  private static catalogPath = path.join(os.homedir(), ".opencodex", "custom_model_catalog.json");
+  private static catalogPath = openCodexCatalogPath();
   private static modelRegistryCachePath = path.join(os.homedir(), ".opencodex", "model_registry_cache.json");
   private static modelRegistryPayload: any | null = null;
   private static modelRegistryLoadedAt = 0;
@@ -776,7 +776,7 @@ export class CatalogSyncService {
   public static syncCustomModelsToCodexCache(): boolean {
     try {
       const cachePath = path.join(codexHomePath(), "models_cache.json");
-      const catPath = path.join(os.homedir(), ".opencodex", "custom_model_catalog.json");
+      const catPath = openCodexCatalogPath();
       if (!fs.existsSync(cachePath) || !fs.existsSync(catPath)) return false;
 
       const cache = JSON.parse(fs.readFileSync(cachePath, "utf-8"));

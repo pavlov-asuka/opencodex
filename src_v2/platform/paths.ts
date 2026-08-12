@@ -41,6 +41,18 @@ export function openCodexDataDir(dataDir?: string): string {
   return configured || path.join(os.homedir(), ".opencodex");
 }
 
+/**
+ * The imported model catalog Codex reads.
+ *
+ * Resolved per call. Fifteen call sites used to build this from os.homedir()
+ * directly, so OPENCODEX_DATA_DIR was honoured for providers.json and the
+ * routing setting but silently ignored for the catalog — the gateway wrote its
+ * providers to one directory and read its models from another.
+ */
+export function openCodexCatalogPath(dataDir?: string): string {
+  return path.join(openCodexDataDir(dataDir), "custom_model_catalog.json");
+}
+
 /** Where the setting that decides official-model routing is kept. */
 export function nativeEgressSettingPath(dataDir?: string): string {
   return path.join(openCodexDataDir(dataDir), "native-egress.json");

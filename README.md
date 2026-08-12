@@ -28,12 +28,14 @@
 前提:已安装 Codex Desktop(MSIX 包 `OpenAI.Codex`)—— Node 运行时和原生 codex.exe 都从它那里取。
 
 1. 从 [Releases](https://github.com/pavlov-asuka/opencodex/releases/latest) 下载 zip,解压到任意位置
-2. 双击 **`OpenCodex.exe`** —— 它会启动网关并打开控制台 `http://127.0.0.1:8765`
+2. 双击 **`OpenCodex.exe`**,控制台在 `http://127.0.0.1:8765`
    (两个可执行文件都**没有代码签名**,首次运行 Windows 会弹"已保护你的电脑",点"更多信息 → 仍要运行")
 3. 在控制台填 API Key、加模型、应用
 4. 重启 Codex Desktop,第三方模型即出现在模型选择器中
 
-**不需要安装 Node.js** —— 启动器会回落到 Codex 自带的运行时。
+**不需要安装 Node.js** —— 启动器先找 `OpenCodex.exe` 旁边的 `node.exe`,找不到就用 Codex Desktop 自带的 `%LOCALAPPDATA%\OpenAI\Codex\bin\node.exe`。
+
+**端口被占用**时无需干预:不设 `OPENCODEX_PORT` 的情况下,若 8765 被别的程序占着,网关自动顺延到下一个空闲端口(最多试 10 个)并把新端口写进 Codex 配置。若占用者是另一个 OpenCodex 实例,则拒绝启动而不顺延 —— 两个实例会争抢注册表与 Codex 配置。
 
 ### 开机自启
 
@@ -47,7 +49,7 @@ schtasks /Create /TN "OpenCodex Gateway" /TR "\"%CD%\OpenCodex.exe\" --backgroun
 
 ## 工作原理
 
-Codex Desktop 在 Windows 上是 MSIX 全信任应用(`OpenAI.Codex`)。它解析 app-server 时**优先读取 `CODEX_CLI_PATH`**,只校验文件存在,然后用 `child_process.spawn` **无 shell** 启动 —— 所以接管点必须是真正的 PE 可执行文件,`.cmd` 和 shebang 脚本都会被拒绝。
+Codex Desktop 在 Windows 上是 MSIX 全信任应用。它解析 app-server 时**优先读取 `CODEX_CLI_PATH`**,只校验文件存在,然后用 `child_process.spawn` **无 shell** 启动 —— 所以接管点必须是真正的 PE 可执行文件,`.cmd` 和 shebang 脚本都会被拒绝。
 
 ```
 ChatGPT Desktop (MSIX)
@@ -63,6 +65,8 @@ codex-provider-bridge.js
 
 模型的选择权始终在客户端:主会话由 Desktop 的模型选择器决定,子代理由父代理点名。网关不做任何"替你选模型"的策略。
 
+凭据用 DPAPI 存在系统密钥库,`providers.json` 里只留引用。网关只监听 `127.0.0.1`,控制台 API 与所有可触达上游的入口都需要网关令牌。
+
 ## 支持的能力
 
 | 能力 | 说明 |
@@ -70,24 +74,29 @@ codex-provider-bridge.js
 | **多 provider** | 任意 OpenAI 兼容端点;Anthropic Messages 与 Google Gemini 协议由适配器按 URL/protocol 自动识别 |
 | **Chat 与 Responses 两种协议** | 每个模型单独选,DeepSeek 这类原生支持 Responses 的直接走 Responses |
 | **原生模型体验** | Computer Use、图像生成、apply_patch、MCP 工具对第三方模型同样可用 |
-| **子代理** | 第三方模型可作为 `spawn_agent` 的子代理(需要目录里的 `multi_agent_version: v2`) |
+| **子代理** | 第三方模型可作为 `spawn_agent` 的子代理 |
 | **Session 编排** | `thread/start` / `resume` / `fork`、同一会话内逐 turn 切换模型 |
-| **推理档位** | 每模型的可选档位、默认档位,以及**下限**(见下) |
+| **推理档位** | 每模型的可选档位、默认档位,以及**下限** |
 
-## 修复的问题
+## 恢复原生 Codex
 
-| 问题 | 说明 |
-| --- | --- |
-| **Windows 上没有 provider bridge** | 整个 Desktop 生命周期层(注册环境、发现、进程管理、启动)都只有 macOS 实现;bridge launcher 是 POSIX `sh` 脚本 |
-| **`config.toml` 被损坏** | 目录路径写进了 TOML **基本字符串**,`C:\Users\...` 中的 `\U` 是非法 Unicode 转义,整个配置文件解析失败 —— 影响远超本项目 |
-| **无法保存 API Key** | 凭据写入在非 macOS 平台直接抛错,且保存时会剥离 `api_key`,没有任何退路 |
-| **Windows 沙箱设置失败** | Codex 按 `dirname(CODEX_CLI_PATH)` 解析三个辅助程序,bridge 目录里没有它们 |
-| **第三方模型无法作为子代理** | Codex 用模型目录中的 `multi_agent_version` 决定 `spawn_agent` 资格,而这个字段从未被写入 |
-| **官方模型在子代理路径被误拒** | 已算出的 `nativePassthroughTurn` 未被采纳,官方模型新建 Session 会返回 400 |
-| **网关生命周期竞争** | 抢端口失败的实例会清除健康实例的环境变量,导致 Desktop 静默退回原生 |
-| **删除服务商残留密钥** | 密钥留在系统密钥库中,且配置里已无引用可清理 |
+三个出口,按"网关还活着吗"和"要不要保留模型选择"来选:
 
-TOML 转义修复与平台无关,已提交给上游项目:[AITabby/codexsplit#37](https://github.com/AITabby/codexsplit/pull/37)。
+| | 触发方式 | 需要网关运行 | 模型选择 | 会话文件修复 |
+| --- | --- | --- | --- | --- |
+| **脱离 OpenCodex** | 控制台顶栏 | 需要 | 保留 | 会修 |
+| **还原原生** | 控制台「官方模型线路」区 | 需要 | **清空** | 会修 |
+| **`Restore-Native-Codex.cmd`** | 双击安装目录里的文件 | 不需要 | 保留 | **不修** |
+
+**脱离 OpenCodex** —— 注销六个环境变量、移除 `config.toml` 托管块、重启 Desktop。服务商、API Key、模型选择全部保留,重新启动网关就全回来了。日常临时退出用这个。
+
+**还原原生** —— 以上全做,外加清空 `providers.json` 里的模型选择和模型目录。API Key 与服务商条目仍在,但模型需要重新勾选。
+
+**`Restore-Native-Codex.cmd`** —— 应急出口,不依赖本项目任何进程还活着。杀网关、删注册表六个变量、清 `config.toml` 托管块、重启 Desktop;不碰 `providers.json` 和模型目录。前两个按钮由网关自己提供,网关或 bridge 崩了就点不到,这个文件是为那种情况准备的。
+
+它唯一不做的是**会话文件修复**:第三方轮次会在会话记录里留下本地 `rs_*` 推理条目,原生 Codex 把这些线程发回 chatgpt.com 时可能出错。两个按钮会改写它们(原文件留 `.opencodex-backup` 备份)。若用 `.cmd` 脱困后发现历史对话在原生 Codex 下报错,启动一次 OpenCodex 再点「脱离 OpenCodex」即可补上。
+
+三者都不会删除你的 API Key 和服务商配置 —— 它们在 `%USERPROFILE%\.opencodex`,重新启动 `OpenCodex.exe` 后自动生效,包括重新写回 Codex 路由配置。
 
 ## 配置
 
@@ -95,14 +104,32 @@ TOML 转义修复与平台无关,已提交给上游项目:[AITabby/codexsplit#37
 
 | 变量 | 默认 | 作用 |
 | --- | --- | --- |
-| `OPENCODEX_AGENT_MESSAGE_ORACLE` | **开启** | 恢复加密的子代理任务载荷(见下)。**关掉它,第三方子代理就完全不可用** |
+| `OPENCODEX_AGENT_MESSAGE_ORACLE` | **开启** | 恢复加密的子代理任务载荷(见下)。**关掉它,第三方子代理完全不可用** |
 | `OPENCODEX_AGENT_MESSAGE_ORACLE_MODEL` | `gpt-5.6-sol` | 用于提取的模型 |
 | `OPENCODEX_AGENT_MESSAGE_ORACLE_TIMEOUT_MS` | `60000` | 提取超时 |
-| `OPENCODEX_PORT` | `8765` | 网关端口。**不设**时,若 8765 已被**别的程序**占用,网关会自动顺延到下一个空闲端口(最多试 10 个)并把新端口写进 Codex 配置;**显式设置**时端口被占用会直接报错而不是偷偷换。若占用者是**另一个 OpenCodex 实例**,则一律拒绝启动、不顺延 —— 两个实例会争抢注册表与 Codex 配置,顺延只会得到两个互相打架的网关 |
+| `OPENCODEX_PORT` | `8765` | 网关端口。显式设置后端口被占用会直接报错,而不是顺延 |
+| `OPENCODEX_NATIVE_EGRESS` | `1` | 官方模型流量是否经过本项目。见下 |
 | `OPENCODEX_WINDOWS_LAUNCH_MODE` | `shell` | `direct` 绕过 shell 激活启动 Desktop |
 | `OPENCODEX_MULTI_AGENT_VERSION` | `v2` | 写入模型目录的多 Agent 协议版本 |
-| `OPENCODEX_NATIVE_EGRESS` | `1` | 官方模型流量是否经过本项目的路由代理。见下 |
 | `OPENCODEX_DEBUG_REQUEST_DUMP` | 关闭 | 记录发往服务商请求的目录(诊断用) |
+| `CODEX_HOME` | `~/.codex` | Codex 数据目录 |
+| `OPENCODEX_DATA_DIR` | `~/.opencodex` | 本项目数据目录 |
+
+### 官方模型线路(重要)
+
+本项目默认会把原生 app-server 的出口改写到 bridge 的本地路由器 —— **官方 GPT 的流量也会穿过我们的进程**,然后原样转发到 chatgpt.com(凭据仍是原生 Codex 会话,不涉及任何第三方 Key)。
+
+这么做的唯一原因:只有看得到请求,才能把 **Codex 派生的子代理**改派给第三方模型。代价是爆炸半径 —— 本项目出故障时官方模型会跟着受影响。
+
+控制台「官方模型线路」里的开关可以关掉它:
+
+| | 开启(默认) | 关闭 |
+| --- | --- | --- |
+| 官方模型 | 经过本项目 | **直连 ChatGPT,不受本项目任何故障影响** |
+| 第三方模型作主会话 | 可用 | 可用 |
+| 第三方模型作子代理 | 可用 | **不可用** |
+
+改动后需重启 Codex Desktop。
 
 ### 固定某个模型的推理档位
 
@@ -119,42 +146,13 @@ TOML 转义修复与平台无关,已提交给上游项目:[AITabby/codexsplit#37
 }
 ```
 
-第三方模型往往比官方便宜得多,而 Desktop 会把上一个模型的档位带到新模型上,只设默认值挡不住。下限只在模型自己声明支持该档位时生效,且不会把更深的档位(如 `ultra`)拉回来。改完重启网关。
-
-### 官方模型线路(重要)
-
-Codex 启动原生 app-server 时,本项目默认会把它的  改写到 bridge 的本地出口路由器 —— **官方 GPT 的流量也会穿过我们的进程**,然后原样转发到 chatgpt.com(凭据仍是原生 Codex 会话,不涉及任何第三方 Key)。
-
-这么做的唯一原因:只有看得到请求,才能把 **Codex 派生的子代理**改派给第三方模型。
-
-代价是爆炸半径:本项目出故障时,官方模型会跟着受影响。
-
-控制台官方模型线路里的开关可以关掉它(等价于 ):
-
-| | 开启(默认) | 关闭 |
-| --- | --- | --- |
-| 官方模型 | 经过本项目 | **直连 ChatGPT,不受本项目任何故障影响** |
-| 第三方模型作主会话 | 可用 | 可用 |
-| 第三方模型作子代理 | 可用 | **不可用** |
-
-改动后需重启 Codex Desktop。
-
-### 出问题时怎么退出
-
-控制台顶栏的 **脱离 OpenCodex** 会注销 、移除托管配置并重启 Desktop,让 Codex 立刻回到原生状态(凭据与模型都保留)。
-
-如果网关或 bridge 已经坏到打不开控制台,用安装目录里的 **** —— 它不依赖本项目的任何进程,直接清理注册表项和配置。
+第三方模型往往比官方便宜得多,而 Desktop 会把上一个模型的档位带到新模型上,只设默认值挡不住。下限只在模型自己声明支持该档位时生效。改完重启网关。
 
 ## 已知限制
 
-**子代理任务载荷是加密的。** Codex 多 Agent v2 把子代理的任务放在 `agent_message` 的 `encrypted_content` 中,那是给 ChatGPT 后端解密的 Fernet token,第三方模型收到的是一段读不懂的密文,因而报告"没有收到任务"。这不是路由缺陷:
+**子代理任务载荷是加密的。** Codex 多 Agent v2 把子代理的任务放在 `agent_message` 的 `encrypted_content` 中,那是给 ChatGPT 后端解密的 Fernet token,第三方模型收到的是一段读不懂的密文。这不是路由缺陷:[openai/codex#32031](https://github.com/openai/codex/issues/32031)、[lidge-jun/opencodex#92](https://github.com/lidge-jun/opencodex/issues/92)。
 
-- [openai/codex#32031](https://github.com/openai/codex/issues/32031)
-- [lidge-jun/opencodex#92](https://github.com/lidge-jun/opencodex/issues/92) —— 同一问题的详细分析,至今开放
-
-`OPENCODEX_AGENT_MESSAGE_ORACLE=1` 提供了一条恢复路径(技术方案由 [@Joseffb](https://github.com/Joseffb) 在 [lidge-jun/opencodex#92](https://github.com/lidge-jun/opencodex/issues/92) 中公开):把信封用**你自己的 Codex 凭据**发回 ChatGPT,配合一次强制函数调用,由后端解密自己的密文并把明文作为函数参数返回,再转成标准输入交给第三方模型。**代价是每个不同任务多一次 ChatGPT 请求**,且依赖未公开的内部格式。
-
-**这一项默认开启**,因为关掉它第三方子代理就完全不可用 —— 该轮次会明确失败(`unreadable_encrypted_agent_task`),而不是让子代理拿着空任务运行。如果你宁可让第三方子代理失败也不想多花那次请求,在 `opencodex.env` 里把该行注释掉即可。
+`OPENCODEX_AGENT_MESSAGE_ORACLE` 提供恢复路径(方案由 [@Joseffb](https://github.com/Joseffb) 公开):把信封用**你自己的 Codex 凭据**发回 ChatGPT,配合一次强制函数调用,由后端解密并把明文作为函数参数返回。**代价是每个不同任务多一次 ChatGPT 请求**,且依赖未公开的内部格式。**默认开启** —— 关掉它该轮次会明确失败(`unreadable_encrypted_agent_task`),而不是让子代理拿着空任务运行。
 
 **其他:**
 
@@ -165,21 +163,14 @@ Codex 启动原生 app-server 时,本项目默认会把它的  改写到 bridge 
 
 ## 从源码构建
 
-运行发行包**不需要系统级 Node** —— 启动器先找 `OpenCodex.exe` 旁边的 `node.exe`,找不到就用 Codex Desktop 自带的 `%LOCALAPPDATA%\OpenAI\Codex\bin\node.exe`。
-
-从源码构建则需要 Node.js 22.19+、npm,以及 [Rust](https://rustup.rs)(用于两个可执行文件):
+需要 Node.js 22.19+、npm,以及 [Rust](https://rustup.rs)(用于两个可执行文件):
 
 ```bash
 npm install
 npm run build:windows      # 编译网关 + bridge shim + 启动器
 npm run package:windows    # 生成 build/OpenCodex-win-x64 和 zip
-```
-
-```bash
 npm test                   # 全量测试
 ```
-
-当前:**173 通过 / 0 失败**。
 
 ### 主要文件
 
@@ -194,12 +185,6 @@ npm test                   # 全量测试
 | `src_v2/services/agent_message_oracle.ts` | 子代理加密载荷恢复 |
 | `native/windows-bridge-launcher/` | Rust bridge shim |
 | `native/windows-launcher/` | Rust 应用启动器(`OpenCodex.exe`) |
-
-## 项目历史
-
-本项目起源于 [AITabby/opencodex](https://github.com/AITabby/codexsplit)(现已更名 CodexSplit)的一个 Fork,补上了上游公开仓库里完全缺失的 Windows 平台层。
-
-自 v1.2.0 起独立演进,并做了一次大幅精简:语音编排、GPT-Live、其他 CLI 的订阅导入(Cursor / Claude / Grok / Antigravity)、子代理决策路由、iOS 伴侣应用、macOS 应用外壳全部物理删除,代码量从 61,000 行降到约 18,000 行,打包体积从 166 MB 降到 3.1 MB(zip 1.1 MB),运行时依赖从 7 个减到 1 个。改造过程、每期的取舍与风险记录在 [docs/SLIM_PLAN.md](docs/SLIM_PLAN.md);改造前的完整状态保留在 `pre-slim` tag 与 `archive/upstream-features` 分支。
 
 ## 致谢
 
@@ -219,12 +204,8 @@ Makes Codex Desktop on **Windows 11** use third-party models alongside official 
 
 Codex resolves its app-server from `CODEX_CLI_PATH` and spawns it **without a shell**, so the interception point has to be a real PE executable — this ships a ~200KB dependency-free Rust shim for that, registers the variable through `HKCU\Environment` with a `WM_SETTINGCHANGE` broadcast, discovers the MSIX package, and stores credentials with DPAPI.
 
-It also fixes a bug that breaks Codex for **every** Windows user: the model catalog path was written into a TOML basic string, so `\U` in `C:\Users\...` made the entire `config.toml` unparseable. Submitted upstream as [#37](https://github.com/AITabby/codexsplit/pull/37).
+**Install:** download the zip from [Releases](https://github.com/pavlov-asuka/opencodex/releases/latest), extract, run `OpenCodex.exe`. Node.js is not required — the launcher falls back to the runtime Codex Desktop ships. If port 8765 is taken by another program the gateway steps to the next free port and writes it into the Codex config; if it is taken by another OpenCodex gateway it refuses to start.
 
-**Install:** download the zip from [Releases](https://github.com/pavlov-asuka/opencodex/releases/latest), extract, run `OpenCodex.exe`. Node.js is not required.
+**Getting back to native Codex:** the dashboard has **脱离 OpenCodex** (unregisters the environment variables and removes the managed config, keeping your providers and model selection) and **还原原生** (the same, plus clearing the selected models). Both need the gateway running. `Restore-Native-Codex.cmd` in the install folder does the same cleanup without depending on any of our processes — use it when the gateway itself is what broke. It does not repair session files; the two dashboard exits do.
 
-**Scope:** this project routes third-party models into Codex and nothing else. Voice orchestration, GPT-Live, subscription imports from other CLIs, the subagent routing policy engine, and the iOS/macOS clients were all removed — see [docs/SLIM_PLAN.md](docs/SLIM_PLAN.md).
-
-**Known limitation:** multi-agent v2 delivers a subagent's task inside an `encrypted_content` block readable only by the ChatGPT backend, so third-party children receive an empty task ([openai/codex#32031](https://github.com/openai/codex/issues/32031)). Set `OPENCODEX_AGENT_MESSAGE_ORACLE=1` to recover it through your own Codex credentials, at the cost of one extra ChatGPT request per task.
-
-Tests: 173 passing.
+**Known limitation:** multi-agent v2 delivers a subagent's task inside an `encrypted_content` block readable only by the ChatGPT backend, so third-party children receive an empty task ([openai/codex#32031](https://github.com/openai/codex/issues/32031)). `OPENCODEX_AGENT_MESSAGE_ORACLE` recovers it through your own Codex credentials at the cost of one extra ChatGPT request per task, and is on by default because third-party subagents do not work without it.

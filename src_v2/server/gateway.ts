@@ -28,6 +28,7 @@ import { agentMessageOracleEnabled, hasEncryptedAgentMessage, resolveEncryptedAg
 import {
   codexConfigPath,
   codexHomePath,
+  openCodexCatalogPath,
   desktopController,
   nativeCodexExecutablePath,
   providerBridgePath,
@@ -199,7 +200,12 @@ export function stripManagedCodexConfig(content: string): string {
     /^[ \t]*openai_base_url[ \t]*=([^\n]*)$\r?\n?/gm,
     (line, value) => (isLoopbackBaseUrl(tomlStringValue(value)) ? "" : line),
   );
-  cleaned = cleaned.replace(/^\s*\[model_providers\.opencodex\][\s\S]*?(?=\n\s*\[|\n\s*# >>>|$)/gm, "");
+  // Under /m the `$` in that lookahead matched an end of *line*, so the lazy
+  // quantifier stopped at the header and left `name`, `base_url` and the
+  // bearer token behind as loose keys - silently reattached to whatever table
+  // preceded them. Consume the header plus every following line that does not
+  // begin a new table instead.
+  cleaned = cleaned.replace(/(?:^|\n)[ \t]*\[model_providers\.opencodex\][^\n]*(?:\n(?![ \t]*\[|[ \t]*# >>>)[^\n]*)*/g, "");
   return cleaned.trim();
 }
 
@@ -236,7 +242,7 @@ export function buildManagedCodexConfig(
   content: string,
   port: number,
   adminToken: string,
-  catalogPath = path.join(os.homedir(), ".opencodex", "custom_model_catalog.json")
+  catalogPath = openCodexCatalogPath()
 ): string {
   const preserved = stripManagedCodexConfig(content);
   // Keep the global default on native OpenAI. The provider bridge explicitly
@@ -1695,7 +1701,7 @@ export class CodexBridgeServer {
   }
 
   private readImportedModelCatalog(): any[] {
-    const catalogPath = path.join(os.homedir(), ".opencodex", "custom_model_catalog.json");
+    const catalogPath = openCodexCatalogPath();
     try {
       const data = JSON.parse(fs.readFileSync(catalogPath, "utf-8"));
       return Array.isArray(data.models) ? data.models : [];
@@ -2034,7 +2040,7 @@ export class CodexBridgeServer {
     const configPath = codexConfigPath();
     let managedConfig = "";
     try { managedConfig = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf-8") : ""; } catch {}
-    const startupCatalogPath = path.join(os.homedir(), ".opencodex", "custom_model_catalog.json");
+    const startupCatalogPath = openCodexCatalogPath();
     let startupCatalog: any = { models: [] };
     if (fs.existsSync(startupCatalogPath)) {
       try { startupCatalog = JSON.parse(fs.readFileSync(startupCatalogPath, "utf-8")); } catch {}
@@ -2049,6 +2055,21 @@ export class CodexBridgeServer {
         console.warn(`[OpenCodex Gateway] Could not remove stale managed routing: ${err?.message || err}`);
       }
     }
+    // Re-engage after Restore-Native-Codex.cmd. That script removes the
+    // managed block, and everything below only ever *synchronised* a block
+    // that was already present - so starting OpenCodex again brought the
+    // gateway up with the configured providers intact and no route from Codex
+    // to reach them. The way back was a dashboard click nobody would guess at.
+    if (!managedConfig.includes("opencodex managed") && startupHasThirdPartyModels) {
+      try {
+        managedConfig = buildCodexRoutingConfig(managedConfig, this.port, this.adminToken, startupCatalogPath, true);
+        fs.writeFileSync(configPath, managedConfig, "utf-8");
+        console.log("[OpenCodex Gateway] Restored managed routing for the configured third-party models.");
+      } catch (err: any) {
+        console.warn(`[OpenCodex Gateway] Could not restore managed routing: ${err?.message || err}`);
+      }
+    }
+
     // Native mode deliberately leaves the imported catalog untouched. In
     // managed mode, always repair the catalog first so native Codex models
     // cannot disappear just because a third-party entry was deleted.
@@ -2068,7 +2089,7 @@ export class CodexBridgeServer {
       } catch (err: any) {
         console.warn(`[OpenCodex Gateway] Could not synchronize managed Codex config: ${err?.message || err}`);
       }
-      const catalogPath = path.join(os.homedir(), ".opencodex", "custom_model_catalog.json");
+      const catalogPath = openCodexCatalogPath();
       let catalog: any = { models: [] };
       if (fs.existsSync(catalogPath)) {
         try { catalog = JSON.parse(fs.readFileSync(catalogPath, "utf-8")); } catch {}
@@ -2130,7 +2151,7 @@ export class CodexBridgeServer {
         // 1. Handshake / Healthcheck & Dashboard UI
         if (req.method === "GET" && url.pathname === "/health") {
           res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ status: "ok", name: "CodexBridge Engine V2", version: "2.2.1", opencodex: true }));
+          res.end(JSON.stringify({ status: "ok", name: "CodexBridge Engine V2", version: "2.2.2", opencodex: true }));
           return;
         }
 
@@ -2429,7 +2450,7 @@ export class CodexBridgeServer {
             isGatewayActive = content.includes("opencodex managed");
           }
 
-          const catalogPath = path.join(os.homedir(), ".opencodex", "custom_model_catalog.json");
+          const catalogPath = openCodexCatalogPath();
           let catalogModels: any[] = [];
           if (fs.existsSync(catalogPath)) {
             try {
@@ -2562,7 +2583,7 @@ export class CodexBridgeServer {
             // Remove models previously owned by this provider but omitted from
             // the latest list, otherwise the next edit resurrects them.
             if (body.install_models !== false) {
-              const catalogPath = path.join(os.homedir(), ".opencodex", "custom_model_catalog.json");
+              const catalogPath = openCodexCatalogPath();
               let catalog: any = { models: [] };
               if (fs.existsSync(catalogPath)) {
                 try { catalog = JSON.parse(fs.readFileSync(catalogPath, "utf-8")); } catch {}
@@ -2759,7 +2780,7 @@ export class CodexBridgeServer {
           }
           this.gatewayRestartInProgress = true;
           try {
-            const catalogPath = path.join(os.homedir(), ".opencodex", "custom_model_catalog.json");
+            const catalogPath = openCodexCatalogPath();
             const configPath = codexConfigPath();
 
             let catalog: any = { models: [] };
@@ -2856,7 +2877,7 @@ export class CodexBridgeServer {
         }
 
         if (req.method === "GET" && url.pathname === "/api/models") {
-          const catalogPath = path.join(os.homedir(), ".opencodex", "custom_model_catalog.json");
+          const catalogPath = openCodexCatalogPath();
           let catalog: any[] = [];
           if (fs.existsSync(catalogPath)) {
             try {
@@ -2947,7 +2968,7 @@ export class CodexBridgeServer {
             }
             if (providersChanged) CredentialStore.saveProviders(providers);
 
-            const catalogPath = path.join(os.homedir(), ".opencodex", "custom_model_catalog.json");
+            const catalogPath = openCodexCatalogPath();
             let catalog: any = { models: [] };
             if (fs.existsSync(catalogPath)) {
               catalog = JSON.parse(fs.readFileSync(catalogPath, "utf-8"));
@@ -2995,7 +3016,7 @@ export class CodexBridgeServer {
             // usable API key behind in the OS secret store.
             for (const removed of removedProviders) CredentialStore.forgetProviderSecret(removed);
 
-            const catalogPath = path.join(os.homedir(), ".opencodex", "custom_model_catalog.json");
+            const catalogPath = openCodexCatalogPath();
             let catalog: any = { models: [] };
             if (fs.existsSync(catalogPath)) {
               try {
@@ -3105,7 +3126,7 @@ export class CodexBridgeServer {
               content = stripManagedCodexConfig(content);
               fs.writeFileSync(configPath, content + "\n", "utf-8");
             }
-            const catalogPath = path.join(os.homedir(), ".opencodex", "custom_model_catalog.json");
+            const catalogPath = openCodexCatalogPath();
             if (fs.existsSync(catalogPath)) {
               writeJsonAtomic(catalogPath, { models: [] });
             }
