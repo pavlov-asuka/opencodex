@@ -1540,6 +1540,46 @@ export class CodexBridgeServer {
     return false;
   }
 
+  /** Endpoints that can reach an upstream carrying the user's own credentials. */
+  private isUpstreamReachingPath(pathname: string): boolean {
+    return isResponsesCompactionPath(pathname)
+      || pathname === "/v1/responses"
+      || pathname === "/responses"
+      || pathname === "/v1/images/generations"
+      || pathname === "/images/generations";
+  }
+
+  /**
+   * Refuse an upstream-reaching request that a web page made.
+   *
+   * Only /api/* was ever authenticated, while copyNativeRequestHeaders swaps a
+   * missing or placeholder bearer for the real ChatGPT access token from
+   * auth.json. A page in any tab could therefore POST here with
+   * `Content-Type: text/plain` — a simple request, so no preflight to refuse —
+   * and have it executed under the user's identity. CORS keeps the reply from
+   * being read, so the exposure is blind request forgery rather than token
+   * theft: someone else's page spending the user's quota and acting as them.
+   *
+   * Listening on 127.0.0.1 is no defence; a browser reaches loopback happily.
+   * No legitimate caller here is a browser — Codex and the bridge send neither
+   * header — so their presence alone is disqualifying.
+   */
+  private rejectBrowserOriginatedRequest(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+    const header = (name: string): string => {
+      const value = req.headers[name];
+      if (Array.isArray(value)) return value[0] || "";
+      return typeof value === "string" ? value : "";
+    };
+    if (!header("origin") && !header("sec-fetch-site") && !header("sec-fetch-mode")) return false;
+
+    res.writeHead(403, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({
+      error: "OpenCodex refuses browser-originated requests on this endpoint",
+      hint: "这个入口只服务 Codex 与 provider bridge。若你在浏览器里看到这条消息，说明某个页面正尝试借用你的 Codex 登录态发起请求。",
+    }));
+    return true;
+  }
+
   private issueAdminCookie(res: http.ServerResponse): void {
     res.setHeader("Set-Cookie", `opencodex_admin=${this.adminToken}; HttpOnly; SameSite=Strict; Path=/`);
   }
@@ -2066,6 +2106,12 @@ export class CodexBridgeServer {
         // Bearer. Keep every local-data and process-control API behind that
         // boundary.
         if (url.pathname.startsWith("/api/") && !this.requireAdmin(req, res)) {
+          return;
+        }
+
+        // Everything below can reach ChatGPT or a provider with credentials
+        // the caller never supplied, so no browser may drive it.
+        if (this.isUpstreamReachingPath(url.pathname) && this.rejectBrowserOriginatedRequest(req, res)) {
           return;
         }
 
