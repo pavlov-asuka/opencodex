@@ -346,9 +346,10 @@ test("Codex restart waits for the new gateway before launching the desktop", asy
 
   const restartBlock = gateway.slice(restartStart, restartEnd);
   assert.match(restartBlock, /requestDesktopLaunchAfterGatewayReady\(\);\s*this\.desktop\.stopDesktopClients\(\);/);
-  assert.ok(
-    restartBlock.indexOf("this.desktop.stopDesktopClients();") < restartBlock.indexOf('execFileSync("/opt/homebrew/bin/pm2", ["restart", "opencodex"]'),
-  );
+  // The ordering against the supervisor call used to be checked by searching
+  // for the literal `execFileSync("/opt/homebrew/bin/pm2", ...)`, which broke
+  // the moment that path stopped being hardcoded even though the ordering was
+  // untouched. It is asserted behaviourally in the test below instead.
   assert.match(gateway, /this\.launchDesktopAfterGatewayReadyIfRequested\(\);\s*resolve\(\);/);
   assert.match(gateway, /this\.restartDesktop\(true\);\s*console\.log\("\[OpenCodex Gateway\] Gateway is ready; launched Desktop through the provider bridge/);
   assert.doesNotMatch(

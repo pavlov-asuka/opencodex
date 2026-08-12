@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { powerShellExecutable } from "../platform/powershell.js";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -186,24 +187,91 @@ function rewriteImagePart(part: any, dataUrl: string, mimeType: string): any {
   return next;
 }
 
-async function processWithSips(input: {
-  buffer: Buffer;
-  mimeType: string;
-  maxEdge: number;
-  jpegQuality: number;
-}): Promise<{ buffer: Buffer; mimeType: string } | null> {
-  if (process.platform !== "darwin") return null;
+type ImageProcessInput = { buffer: Buffer; mimeType: string; maxEdge: number; jpegQuality: number };
+type ImageProcessResult = { buffer: Buffer; mimeType: string } | null;
 
+/**
+ * Resize with System.Drawing through PowerShell.
+ *
+ * The only implementation used to be sips, which returns null off macOS. On
+ * Windows — the platform this fork actually targets — that meant tool-result
+ * screenshots were never shrunk: every oversized image went to the provider at
+ * full resolution, spending context and quota on pixels no model needed, and
+ * on providers with a hard attachment limit failing the request outright.
+ *
+ * Paths and settings travel as environment variables rather than as arguments,
+ * so a temp path can never be read as script syntax.
+ */
+async function processWithWindowsImaging(input: ImageProcessInput): Promise<ImageProcessResult> {
+  const script = [
+    "$ErrorActionPreference='Stop'",
+    "Add-Type -AssemblyName System.Drawing",
+    "$bytes=[IO.File]::ReadAllBytes($env:OC_IMAGE_IN)",
+    "$stream=New-Object IO.MemoryStream(,$bytes)",
+    "$source=[Drawing.Image]::FromStream($stream)",
+    "$max=[int]$env:OC_IMAGE_MAX_EDGE",
+    "$scale=[Math]::Min(1.0,$max/[Math]::Max($source.Width,$source.Height))",
+    "$width=[int][Math]::Max(1,[Math]::Round($source.Width*$scale))",
+    "$height=[int][Math]::Max(1,[Math]::Round($source.Height*$scale))",
+    "$target=New-Object Drawing.Bitmap($width,$height)",
+    "$graphics=[Drawing.Graphics]::FromImage($target)",
+    "$graphics.InterpolationMode='HighQualityBicubic'",
+    "$graphics.PixelOffsetMode='HighQuality'",
+    "$graphics.DrawImage($source,0,0,$width,$height)",
+    "$graphics.Dispose()",
+    "if($env:OC_IMAGE_FORMAT -eq 'png'){",
+    "  $target.Save($env:OC_IMAGE_OUT,[Drawing.Imaging.ImageFormat]::Png)",
+    "} else {",
+    "  $codec=[Drawing.Imaging.ImageCodecInfo]::GetImageEncoders()|Where-Object{$_.MimeType -eq 'image/jpeg'}",
+    "  $parameters=New-Object Drawing.Imaging.EncoderParameters(1)",
+    "  $parameters.Param[0]=New-Object Drawing.Imaging.EncoderParameter([Drawing.Imaging.Encoder]::Quality,[int]$env:OC_IMAGE_QUALITY)",
+    "  $target.Save($env:OC_IMAGE_OUT,$codec,$parameters)",
+    "}",
+    "$target.Dispose();$source.Dispose();$stream.Dispose()",
+  ].join("\n");
+
+  return withTemporaryImageFiles(input, async (inputPath, outputPath, outputMimeType) => {
+    await execFileAsync(
+      powerShellExecutable(),
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+      {
+        timeout: 15_000,
+        maxBuffer: 256 * 1024,
+        windowsHide: true,
+        env: {
+          ...process.env,
+          OC_IMAGE_IN: inputPath,
+          OC_IMAGE_OUT: outputPath,
+          OC_IMAGE_MAX_EDGE: String(input.maxEdge),
+          OC_IMAGE_QUALITY: String(input.jpegQuality),
+          OC_IMAGE_FORMAT: outputMimeType === "image/png" ? "png" : "jpeg",
+        },
+      },
+    );
+  });
+}
+
+async function processWithSips(input: ImageProcessInput): Promise<ImageProcessResult> {
+  return withTemporaryImageFiles(input, async (inputPath, outputPath, outputMimeType) => {
+    const args = ["-Z", String(input.maxEdge), "-s", "format", outputMimeType === "image/png" ? "png" : "jpeg"];
+    if (outputMimeType !== "image/png") args.push("-s", "formatOptions", String(input.jpegQuality));
+    args.push(inputPath, "--out", outputPath);
+    await execFileAsync("/usr/bin/sips", args, { timeout: 15_000, maxBuffer: 256 * 1024 });
+  });
+}
+
+/** Both backends work the same way: write the source, run a tool, read the result. */
+async function withTemporaryImageFiles(
+  input: ImageProcessInput,
+  run: (inputPath: string, outputPath: string, outputMimeType: string) => Promise<void>,
+): Promise<ImageProcessResult> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "opencodex-cu-image-"));
   const inputPath = path.join(tempDir, "input");
   const outputMimeType = input.mimeType === "image/png" ? "image/png" : "image/jpeg";
   const outputPath = path.join(tempDir, outputMimeType === "image/png" ? "output.png" : "output.jpg");
   try {
     await fs.writeFile(inputPath, input.buffer);
-    const args = ["-Z", String(input.maxEdge), "-s", "format", outputMimeType === "image/png" ? "png" : "jpeg"];
-    if (outputMimeType !== "image/png") args.push("-s", "formatOptions", String(input.jpegQuality));
-    args.push(inputPath, "--out", outputPath);
-    await execFileAsync("/usr/bin/sips", args, { timeout: 15_000, maxBuffer: 256 * 1024 });
+    await run(inputPath, outputPath, outputMimeType);
     const buffer = await fs.readFile(outputPath);
     return buffer.length > 0 ? { buffer, mimeType: outputMimeType } : null;
   } catch {
@@ -211,6 +279,13 @@ async function processWithSips(input: {
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+/** The resizer for this platform, or null where there is none. */
+export function platformImageProcessor(): ((input: ImageProcessInput) => Promise<ImageProcessResult>) | null {
+  if (process.platform === "darwin") return processWithSips;
+  if (process.platform === "win32") return processWithWindowsImaging;
+  return null;
 }
 
 async function optimizeImagePart(part: any, state: OptimizerState, textMode: boolean): Promise<any> {
@@ -296,7 +371,7 @@ function createState(options: ComputerUseImageOptimizationOptions): OptimizerSta
     maxEdge: Math.max(512, Math.floor(options.maxEdge || DEFAULT_COMPUTER_SCREENSHOT_MAX_EDGE)),
     maxSourceBytes: Math.max(0, Math.floor(options.maxSourceBytes ?? DEFAULT_COMPUTER_SCREENSHOT_MAX_SOURCE_BYTES)),
     jpegQuality: Math.min(95, Math.max(50, Math.floor(options.jpegQuality || DEFAULT_COMPUTER_SCREENSHOT_JPEG_QUALITY))),
-    processImage: options.processImage || processWithSips,
+    processImage: options.processImage || platformImageProcessor() || (async () => null),
     seen: new Set<string>(),
     stats: emptyStats(),
   };

@@ -1541,6 +1541,22 @@ export class CodexBridgeServer {
     return false;
   }
 
+    /**
+   * Locate the process supervisor that can restart the gateway, if any.
+   *
+   * This was a hardcoded "/opt/homebrew/bin/pm2", which is wrong even on the
+   * macOS machines it was written for — an Intel Homebrew installs to
+   * /usr/local — and simply absent on Windows.
+   */
+  private static gatewaySupervisorPath(): string {
+    const configured = String(process.env.OPENCODEX_PM2_PATH || "").trim();
+    if (configured) return fs.existsSync(configured) ? configured : "";
+    // The Windows layout runs the gateway from OpenCodex.exe with a login
+    // task, with nothing to ask for a restart.
+    if (process.platform === "win32") return "";
+    return ["/opt/homebrew/bin/pm2", "/usr/local/bin/pm2", "/usr/bin/pm2"].find((candidate) => fs.existsSync(candidate)) || "";
+  }
+
   /** Endpoints that can reach an upstream carrying the user's own credentials. */
   private isUpstreamReachingPath(pathname: string): boolean {
     return isResponsesCompactionPath(pathname)
@@ -2755,19 +2771,40 @@ export class CodexBridgeServer {
             this.requestDesktopLaunchAfterGatewayReady();
             this.desktop.stopDesktopClients();
 
+            // The gateway process is only restartable where a supervisor runs
+            // it. The Windows layout has none — OpenCodex.exe plus a login
+            // task — so claiming "网关服务正在重新启动" was untrue there: the
+            // hardcoded Homebrew path always threw and the catch quietly took
+            // over. The user-visible purpose is served either way, because the
+            // Codex config and catalog are written above and the desktop is
+            // restarted below; only the gateway's own process survives.
+            const supervisor = CodexBridgeServer.gatewaySupervisorPath();
+
             res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ status: "success", message: "桌面端与网关服务正在重新启动..." }));
+            res.end(JSON.stringify({
+              status: "success",
+              message: supervisor ? "桌面端与网关服务正在重新启动..." : "桌面端正在重新启动,配置已生效(本机没有网关进程守护器,网关无需重启)。",
+            }));
+
+            const finishWithoutSupervisor = (): void => {
+              // The running gateway already holds the final config and
+              // catalog, so it is safe to consume the marker and relaunch the
+              // desktop from here.
+              try { fs.unlinkSync(this.desktopRestartMarkerPath); } catch {}
+              this.desktop.launchDesktopClient(true);
+              this.gatewayRestartInProgress = false;
+            };
+
+            if (!supervisor) {
+              setTimeout(finishWithoutSupervisor, 300);
+              return;
+            }
 
             setTimeout(() => {
               try {
-                execFileSync("/opt/homebrew/bin/pm2", ["restart", "opencodex"], { stdio: "ignore" });
+                execFileSync(supervisor, ["restart", "opencodex"], { stdio: "ignore" });
               } catch {
-                // Keep the current gateway usable if PM2 is unavailable. The
-                // old process already has the final config/catalog, so it is
-                // safe to consume the marker and relaunch the desktop here.
-                try { fs.unlinkSync(this.desktopRestartMarkerPath); } catch {}
-                this.desktop.launchDesktopClient(true);
-                this.gatewayRestartInProgress = false;
+                finishWithoutSupervisor();
               }
             }, 300);
             return;
@@ -2821,10 +2858,15 @@ export class CodexBridgeServer {
         }
 
         if (req.method === "GET" && url.pathname.startsWith("/api/logs")) {
+          // Only PM2's logs were ever read, so on Windows — where nothing
+          // supervises the gateway — this panel was permanently empty. The
+          // launcher's own log is the one file that does exist there.
           const logFiles = [
             { path: path.join(os.homedir(), ".pm2", "logs", "opencodex-out.log"), level: "info", source: "gateway" },
-            { path: path.join(os.homedir(), ".pm2", "logs", "opencodex-error.log"), level: "error", source: "gateway" }
-          ];
+            { path: path.join(os.homedir(), ".pm2", "logs", "opencodex-error.log"), level: "error", source: "gateway" },
+            { path: path.join(path.dirname(process.execPath), "opencodex-launcher.log"), level: "error", source: "launcher" },
+            { path: path.join(this.dataDir, "opencodex-launcher.log"), level: "error", source: "launcher" },
+          ].filter((file) => fs.existsSync(file.path));
           const entries: Array<{ time: string; level: string; text: string; source: string }> = [];
           for (const file of logFiles) {
             const lines = readLogTail(file.path, 192 * 1024);
