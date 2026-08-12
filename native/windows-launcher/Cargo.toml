@@ -1,6 +1,6 @@
 [package]
 name = "opencodex-launcher"
-version = "2.2.2"
+version = "2.2.3"
 edition = "2021"
 description = "Windows launcher that starts the OpenCodex gateway and opens its dashboard"
 license = "MIT"

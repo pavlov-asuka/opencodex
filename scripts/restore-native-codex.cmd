@@ -36,15 +36,24 @@ rem Orphaned keys are only removed when they are demonstrably ours: a catalog
 rem under .opencodex, a base URL on loopback. An unscoped delete would take a
 rem model_catalog_json or openai_base_url the user set themselves, which is
 rem the one thing an escape hatch must never do.
+rem
+rem Encoding is explicit on both the read and the write. config.toml is UTF-8
+rem without a BOM, and Windows PowerShell 5.1 assumes the system code page for
+rem such files: on a non-UTF-8 locale the round trip decoded UTF-8 bytes as
+rem (say) GBK and wrote them back, which preserved most bytes by luck and
+rem replaced any sequence that was not valid in that code page with "?". That
+rem silently destroyed characters in non-ASCII project paths, took the closing
+rem quote with them, and left config.toml unparseable - so Codex could not
+rem start and asked to elevate instead.
 powershell -NoProfile -Command ^
   "$p = Join-Path $env:USERPROFILE '.codex\config.toml';" ^
   "if (Test-Path $p) {" ^
-  "  $c = Get-Content $p -Raw;" ^
+  "  $c = [IO.File]::ReadAllText($p, [Text.UTF8Encoding]::new($false));" ^
   "  $c = [regex]::Replace($c, '(?s)# >>> opencodex managed >>>.*?# <<< opencodex managed (?:>>>|<<<)\r?\n?', '');" ^
   "  $c = [regex]::Replace($c, '(?m)^[ \t]*model_catalog_json[ \t]*=.*$\r?\n?', { param($m) if ($m.Value -match '\.opencodex') { '' } else { $m.Value } });" ^
   "  $c = [regex]::Replace($c, '(?m)^[ \t]*openai_base_url[ \t]*=.*$\r?\n?', { param($m) if ($m.Value -match '127\.0\.0\.1|localhost') { '' } else { $m.Value } });" ^
   "  $c = [regex]::Replace($c, '(?:^|\n)[ \t]*\[model_providers\.opencodex\][^\n]*(?:\n(?![ \t]*\[)[^\n]*)*', '');" ^
-  "  Set-Content -Path $p -Value ($c.Trim() + \"`n\") -NoNewline;" ^
+  "  [IO.File]::WriteAllText($p, $c.Trim() + \"`n\", [Text.UTF8Encoding]::new($false));" ^
   "  Write-Host '        config.toml cleaned.'" ^
   "} else { Write-Host '        config.toml not found; nothing to clean.' }"
 

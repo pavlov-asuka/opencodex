@@ -68,3 +68,60 @@ test("the escape hatch does not touch the user's own config keys", async () => {
   assert.match(script, /WindowsApps\\OpenAI\./, "process termination must be scoped by install location");
   assert.match(script, /PackageFamilyName/, "the relaunch must resolve the package, not hardcode one machine's PFN");
 });
+
+test("the escape hatch round-trips config.toml without destroying characters", { skip: process.platform !== "win32" }, async () => {
+  // config.toml is UTF-8 without a BOM. Windows PowerShell 5.1 assumes the
+  // system code page for such files, so `Get-Content -Raw` + `Set-Content`
+  // decoded UTF-8 bytes as (on a Chinese locale) GBK and wrote them back:
+  // most bytes survived by luck, and any sequence not valid in that code page
+  // became "?". That destroyed characters inside non-ASCII project paths and
+  // took the closing quote with them, leaving config.toml unparseable — Codex
+  // then failed to start and asked to elevate instead. Observed on a real
+  // machine, not hypothetically.
+  const { execFileSync } = await import("node:child_process");
+  const fsp = await import("node:fs/promises");
+  const os = await import("node:os");
+
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "opencodex-enc-"));
+  const file = path.join(dir, "config.toml");
+  const original = [
+    'model = "gpt-5.6"',
+    "",
+    "[projects.'d:\\coding\\project\\自动化任务']",
+    'trust_level = "trusted"',
+    "",
+    "[projects.'d:\\coding\\project\\基金年报半年报对比工具']",
+    'trust_level = "trusted"',
+    "",
+  ].join("\n");
+  await fsp.writeFile(file, original, "utf8");
+
+  try {
+    // The exact expressions the script uses to read and write.
+    execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+      `$c = [IO.File]::ReadAllText('${file}', [Text.UTF8Encoding]::new($false));`
+      + ` [IO.File]::WriteAllText('${file}', $c, [Text.UTF8Encoding]::new($false))`,
+    ], { windowsHide: true, stdio: "ignore" });
+
+    const after = await fsp.readFile(file, "utf8");
+    assert.equal(after, original, "a read-write cycle must not alter a single byte");
+    assert.equal(after.includes("\uFFFD"), false, "no character may be replaced");
+    for (const line of after.split("\n")) {
+      if (!line.startsWith("[projects.")) continue;
+      assert.match(line, /^\[projects\.'.*'\]$/, `${line} lost its closing quote`);
+    }
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the escape hatch reads and writes config.toml with an explicit encoding", async () => {
+  // The behavioural test above proves the expressions are correct; this proves
+  // the script still uses them. Get-Content/Set-Content without -Encoding is
+  // the exact shape that corrupted a real config, so it must not come back.
+  const script = await readFile(path.join(repoRoot, "scripts", "restore-native-codex.cmd"), "utf-8");
+  assert.match(script, /ReadAllText\(\$p, \[Text\.UTF8Encoding\]/, "the read must name its encoding");
+  assert.match(script, /WriteAllText\(\$p, /, "the write must name its encoding");
+  assert.doesNotMatch(script, /Get-Content \$p -Raw/, "PowerShell 5.1 reads that as the system code page");
+  assert.doesNotMatch(script, /Set-Content -Path \$p/, "and writes it back the same way");
+});
