@@ -75,7 +75,16 @@ export class CredentialStore {
               }
             }
           }
-          if (migrated) CredentialStore.saveProviders(CredentialStore.cachedProviders);
+          if (migrated) {
+            // Opportunistic: the credentials are already in the OS store, so a
+            // failed rewrite must not turn a successful load into an empty
+            // provider list via the catch below.
+            try {
+              CredentialStore.saveProviders(CredentialStore.cachedProviders);
+            } catch (error: any) {
+              console.warn(`[OpenCodex] Credential migration could not be persisted: ${error.message}`);
+            }
+          }
         }
         CredentialStore.lastMtime = stat.mtimeMs;
         return CredentialStore.cachedProviders;
@@ -161,7 +170,13 @@ export class CredentialStore {
       CredentialStore.cachedProviders = safeProviders;
       CredentialStore.lastMtime = fs.statSync(CredentialStore.providersConfigPath).mtimeMs;
     } catch (e: any) {
+      // This used to be swallowed with a console.error, so the save endpoint
+      // carried on and answered 200. A read-only directory, an antivirus lock
+      // or a full disk produced "saved successfully" in the dashboard and an
+      // empty configuration after the next restart — sometimes with the API
+      // key already in the OS credential store, so the two disagreed.
       console.error(`Failed to save providers config: ${e.message}`);
+      throw new Error(`无法写入服务商配置 ${CredentialStore.providersConfigPath}：${e.message}`);
     }
   }
 

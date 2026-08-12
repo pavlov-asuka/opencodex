@@ -250,6 +250,21 @@ export function buildManagedCodexConfig(
 
 type ProviderTestStatus = "untested" | "connected" | "failed" | "simulated";
 
+/**
+ * Turn a /models response status into a verdict the user can act on.
+ *
+ * The check previously failed only on 401 and 403 and called everything else
+ * connected, which made a mistyped Base URL look like a working provider.
+ */
+export function describeProviderTestStatus(status: number): [ProviderTestStatus, string] {
+  if (status >= 200 && status < 300) return ["connected", "服务商网络与接口连接成功"];
+  if (status === 401 || status === 403) return ["failed", `接口可连通，但 API Key 无效或未授权 (HTTP ${status})`];
+  if (status === 404) return ["failed", `接口返回 404：Base URL 可能多写或少写了路径（应指向 /v1 这一层）`];
+  if (status === 429) return ["failed", "服务商限流 (HTTP 429)：稍后重试，或检查账户配额"];
+  if (status >= 500) return ["failed", `服务商上游故障 (HTTP ${status})：不是本机配置问题，稍后重试`];
+  return ["failed", `接口返回意外状态 (HTTP ${status})`];
+}
+
 function recordProviderTest(providerName: string, status: ProviderTestStatus, message: string): void {
   const name = String(providerName || "").trim().toLowerCase();
   if (!name) return;
@@ -259,7 +274,13 @@ function recordProviderTest(providerName: string, status: ProviderTestStatus, me
   provider.last_test_status = status;
   provider.last_test_at = new Date().toISOString();
   provider.last_test_message = message.slice(0, 500);
-  CredentialStore.saveProviders(providers);
+  // Recording the outcome is a convenience; failing to record it must not
+  // turn a completed connectivity test into an error response.
+  try {
+    CredentialStore.saveProviders(providers);
+  } catch (error: any) {
+    console.warn(`[OpenCodex] Could not record the connection test result: ${error.message}`);
+  }
 }
 
 
@@ -2633,12 +2654,12 @@ export class CodexBridgeServer {
               });
               clearTimeout(timer);
 
-              if (testRes.status === 401 || testRes.status === 403) {
-                finishTest("failed", `接口可连通，但 API Key 无效或未授权 (HTTP ${testRes.status})`);
-                return;
-              }
-
-              finishTest("connected", "服务商网络与接口连接成功");
+              // Only a 2xx means the endpoint answered as a model listing.
+              // Everything except 401/403 used to fall through to "connected",
+              // so a wrong Base URL (404), a rate limit (429) or an upstream
+              // outage (5xx) all reported success and only failed later, on a
+              // real request.
+              finishTest(...describeProviderTestStatus(testRes.status));
               return;
             } catch (netErr: any) {
               clearTimeout(timer);
