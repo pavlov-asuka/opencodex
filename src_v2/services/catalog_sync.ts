@@ -6,6 +6,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { codexHomePath } from "../platform/paths.js";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
 import { ProviderConfig } from "../core/types.js";
@@ -335,7 +336,7 @@ function codexModelCacheMetadata(modelSlug: string): any | undefined {
   const requested = String(modelSlug || "").trim().toLowerCase();
   if (!requested) return undefined;
   try {
-    const cachePath = path.join(os.homedir(), ".codex", "models_cache.json");
+    const cachePath = path.join(codexHomePath(), "models_cache.json");
     const cache = JSON.parse(fs.readFileSync(cachePath, "utf-8"));
     const models = Array.isArray(cache?.models) ? cache.models : [];
     return models.find((model: any) => [model?.slug, model?.id, model?.model, model?.backend_model]
@@ -774,7 +775,7 @@ export class CatalogSyncService {
 
   public static syncCustomModelsToCodexCache(): boolean {
     try {
-      const cachePath = path.join(os.homedir(), ".codex", "models_cache.json");
+      const cachePath = path.join(codexHomePath(), "models_cache.json");
       const catPath = path.join(os.homedir(), ".opencodex", "custom_model_catalog.json");
       if (!fs.existsSync(cachePath) || !fs.existsSync(catPath)) return false;
 

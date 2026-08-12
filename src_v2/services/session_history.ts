@@ -6,6 +6,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { codexHomePath } from "../platform/paths.js";
 import os from "node:os";
 import { ChatMessage } from "../core/types.js";
 
@@ -62,7 +63,10 @@ function responseContentToChatContent(content: any): string | any[] {
 }
 
 export class SessionHistoryService {
-  private static sessionsDir = path.join(os.homedir(), ".codex", "sessions");
+  /** Resolved per access so CODEX_HOME is honoured, not just the default tree. */
+  private static get sessionsDir(): string {
+    return path.join(codexHomePath(), "sessions");
+  }
 
   /**
    * Find session JSON file by sessionId or client_metadata

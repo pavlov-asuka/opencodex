@@ -459,7 +459,7 @@ function isOfficialCachedModel(model: any): boolean {
 
 function readOfficialModelMap(): Map<string, any> {
   const official = new Map<string, any>();
-  const cachePath = path.join(os.homedir(), ".codex", "models_cache.json");
+  const cachePath = path.join(codexHomePath(), "models_cache.json");
   try {
     const cache = JSON.parse(fs.readFileSync(cachePath, "utf-8"));
     for (const model of Array.isArray(cache.models) ? cache.models : []) {

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { codexHomePath } from "../platform/paths.js";
 import os from "node:os";
 
 export interface RoutingCatalogModel {
@@ -212,7 +213,7 @@ function modelFromEntry(entry: any, source: "custom" | "native"): RoutingCatalog
 
 export function readRoutingCatalog(
   dataDir = process.env.OPENCODEX_DATA_DIR || path.join(os.homedir(), ".opencodex"),
-  nativeDataDir = path.join(os.homedir(), ".codex"),
+  nativeDataDir = codexHomePath(),
 ): RoutingCatalogModel[] {
   const sources: Array<{ filePath: string; source: "custom" | "native" }> = [
     // This is Codex's existing model capability interface/cache. It carries

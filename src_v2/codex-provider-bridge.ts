@@ -22,7 +22,7 @@ import { RequestDecompressor } from "./core/decompressor.js";
 import { copySafeResponseHeaders, writeHttpResponseChunked } from "./services/http_stream.js";
 import { fetchUpstream, upstreamErrorDetails } from "./services/upstream_fetch.js";
 import { copyNativeRequestHeaders } from "./server/native_headers.js";
-import { codexHomePath, nativeEgressEnabled } from "./platform/paths.js";
+import { codexHomePath, nativeEgressEnabled, openCodexDataDir } from "./platform/paths.js";
 
 export type CodexProvider = "openai" | "opencodex";
 
@@ -99,11 +99,17 @@ type GatewayTurn = {
 
 const NATIVE_PROVIDER: CodexProvider = "openai";
 const GATEWAY_PROVIDER: CodexProvider = "opencodex";
-const MODEL_CATALOG_FILES = [
-  path.join(os.homedir(), ".opencodex", "custom_model_catalog.json"),
-  path.join(os.homedir(), ".codex", "models_cache.json"),
-  path.join(os.homedir(), ".codex", "models_catalog.json"),
-];
+/**
+ * Resolved per call rather than at module load, so CODEX_HOME and
+ * OPENCODEX_DATA_DIR are honoured and tests can point them at a temp tree.
+ */
+function modelCatalogFiles(): string[] {
+  return [
+    path.join(openCodexDataDir(), "custom_model_catalog.json"),
+    path.join(codexHomePath(), "models_cache.json"),
+    path.join(codexHomePath(), "models_catalog.json"),
+  ];
+}
 
 function cleanString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -193,7 +199,8 @@ export function classifyProviderModel(model: unknown, catalogs: unknown[] = []):
 
 function readCatalogs(): unknown[] {
   const configured = cleanString(process.env.OPENCODEX_MODEL_CATALOG_PATH);
-  const files = configured ? [configured, ...MODEL_CATALOG_FILES] : MODEL_CATALOG_FILES;
+  const catalogFiles = modelCatalogFiles();
+  const files = configured ? [configured, ...catalogFiles] : catalogFiles;
   const catalogs: unknown[] = [];
   const seen = new Set<string>();
   for (const file of files) {
@@ -819,7 +826,7 @@ function nativeCodexPath(): string {
   // finds the native app-server instead of a macOS-only bundle path.
   if (process.platform === "win32") {
     const codexHome = cleanString(process.env.CODEX_HOME)
-      || path.join(os.homedir(), ".codex");
+      || codexHomePath();
     return path.join(codexHome, "plugins", ".plugin-appserver", "codex.exe");
   }
   return "/Applications/ChatGPT.app/Contents/Resources/codex";
@@ -1354,7 +1361,7 @@ async function runProviderBridge(): Promise<void> {
               id: parent.id,
               result: lastInitializeResult || {
                 userAgent: "codex/1.0",
-                codexHome: path.join(os.homedir(), ".codex"),
+                codexHome: codexHomePath(),
                 platformFamily: process.platform === "win32" ? "windows" : "unix",
                 platformOs: process.platform === "darwin" ? "macos" : process.platform,
               },
@@ -2053,7 +2060,7 @@ async function runProviderBridge(): Promise<void> {
           id: message.id,
           result: lastInitializeResult || {
             userAgent: "codex/1.0",
-            codexHome: path.join(os.homedir(), ".codex"),
+            codexHome: codexHomePath(),
             platformFamily: process.platform === "win32" ? "windows" : "unix",
             platformOs: process.platform === "darwin" ? "macos" : process.platform,
           },

@@ -9,10 +9,16 @@
 
 import fs from "node:fs";
 import http from "node:http";
-import os from "node:os";
 import path from "node:path";
+import { codexHomePath } from "../platform/paths.js";
 
-const CODEX_AUTH_PATH = path.join(os.homedir(), ".codex", "auth.json");
+/**
+ * Resolved per call. As a module-load constant it ignored CODEX_HOME, so a
+ * user with a custom Codex directory had their token read from the wrong tree.
+ */
+function codexAuthPath(): string {
+  return path.join(codexHomePath(), "auth.json");
+}
 
 export type NativeProxyOptions = {
   /** The bearer token installed in Codex config for the local gateway. */
@@ -29,7 +35,7 @@ function headerValue(req: http.IncomingMessage, name: string): string {
 
 export function readNativeAccessToken(): string {
   try {
-    const auth = JSON.parse(fs.readFileSync(CODEX_AUTH_PATH, "utf-8"));
+    const auth = JSON.parse(fs.readFileSync(codexAuthPath(), "utf-8"));
     return typeof auth?.tokens?.access_token === "string" ? auth.tokens.access_token.trim() : "";
   } catch {
     return "";
