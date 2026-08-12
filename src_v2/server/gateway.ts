@@ -18,6 +18,7 @@ import { applyDefaultReasoningCapabilities, CatalogSyncService, buildFullCatalog
 import { copyNativeRequestHeaders } from "./native_headers.js";
 import { ProviderConfig } from "../core/types.js";
 import { isNativeResponsesReasoningId } from "../core/responses_safety.js";
+import { writeJsonAtomic } from "../core/atomic_write.js";
 import { closeUpstreamDispatcher, fetchUpstream, upstreamErrorDetails } from "../services/upstream_fetch.js";
 import { copySafeResponseHeaders, writeHttpResponseChunked, writeSseData } from "../services/http_stream.js";
 import { TaskRouter } from "../services/task_router.js";
@@ -2047,7 +2048,7 @@ export class CodexBridgeServer {
       if (before !== JSON.stringify(catalog.models)) {
         try {
           fs.mkdirSync(path.dirname(catalogPath), { recursive: true, mode: 0o700 });
-          fs.writeFileSync(catalogPath, JSON.stringify(catalog, null, 2), { encoding: "utf-8", mode: 0o600 });
+          writeJsonAtomic(catalogPath, catalog);
           try { fs.chmodSync(catalogPath, 0o600); } catch {}
         } catch (err: any) {
           // A read-only test/container home must not prevent the gateway from
@@ -2541,7 +2542,7 @@ export class CodexBridgeServer {
               rebuildProviderCatalogModels(catalog, resolvedProviderName, selectedModels, selectedModelProtocols, provider);
 
               preserveOfficialModels(catalog);
-              fs.writeFileSync(catalogPath, JSON.stringify(catalog, null, 2), "utf-8");
+              writeJsonAtomic(catalogPath, catalog);
 
               // Enable or remove the managed block according to the final
               // selected-model state. Saving credentials alone must not route
@@ -2806,7 +2807,7 @@ export class CodexBridgeServer {
               const before = JSON.stringify(data.models || []);
               preserveOfficialModels(data);
               if (before !== JSON.stringify(data.models || [])) {
-                fs.writeFileSync(catalogPath, JSON.stringify(data, null, 2), "utf-8");
+                writeJsonAtomic(catalogPath, data);
               }
               // Official native models are not web-managed models. They stay
               // in the desktop catalog, but only provider-owned entries are
@@ -2898,7 +2899,7 @@ export class CodexBridgeServer {
                     .some((value: any) => ids.includes(String(value)));
                 });
                 preserveOfficialModels(catalog);
-                fs.writeFileSync(catalogPath, JSON.stringify(catalog, null, 2), "utf-8");
+                writeJsonAtomic(catalogPath, catalog);
                 CatalogSyncService.syncCustomModelsToCodexCache();
               }
             }
@@ -2942,7 +2943,7 @@ export class CodexBridgeServer {
                     String(model.backend_provider || model.provider_name || "").toLowerCase() !== String(providerName).toLowerCase()
                   );
                   preserveOfficialModels(catalog);
-                  fs.writeFileSync(catalogPath, JSON.stringify(catalog, null, 2), "utf-8");
+                  writeJsonAtomic(catalogPath, catalog);
                   CatalogSyncService.syncCustomModelsToCodexCache();
                 }
               } catch {}
@@ -2977,7 +2978,7 @@ export class CodexBridgeServer {
             const body = await this.parseJsonBody(req);
             const enabled = body?.enabled !== false;
             fs.mkdirSync(this.dataDir, { recursive: true });
-            fs.writeFileSync(nativeEgressSettingPath(this.dataDir), JSON.stringify({ enabled }, null, 2), "utf-8");
+            writeJsonAtomic(nativeEgressSettingPath(this.dataDir), { enabled });
             // The bridge reads this from the environment Desktop passes down,
             // so republish it and let the caller restart Desktop.
             if (this.registeredProviderBridge) this.desktop.registerProviderBridgeEnvironment(this.port);
@@ -3044,7 +3045,7 @@ export class CodexBridgeServer {
             }
             const catalogPath = path.join(os.homedir(), ".opencodex", "custom_model_catalog.json");
             if (fs.existsSync(catalogPath)) {
-              fs.writeFileSync(catalogPath, JSON.stringify({ models: [] }), "utf-8");
+              writeJsonAtomic(catalogPath, { models: [] });
             }
             CatalogSyncService.syncCustomModelsToCodexCache();
 

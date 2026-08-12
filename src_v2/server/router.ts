@@ -219,9 +219,56 @@ function collectResponseFunctionCall(
   if (call) calls.set(call.call_id, call);
 }
 
+/**
+ * Ceilings for a response held whole in memory.
+ *
+ * This function buffers every SSE event until the upstream finishes, so a long
+ * reply, a tool loop, or an upstream that simply never stops grew the process
+ * without limit. The caps are far above any real answer; crossing one means
+ * the provider is misbehaving, and a clear protocol error beats an OOM.
+ */
+const MAX_COLLECTED_EVENT_BYTES = 64 * 1024 * 1024;
+const MAX_COLLECTED_SINGLE_EVENT_BYTES = 8 * 1024 * 1024;
+const MAX_COLLECTED_ERROR_BODY_BYTES = 1 * 1024 * 1024;
+
+export class ProviderResponseTooLargeError extends Error {
+  constructor(limit: number, what: string) {
+    super(`Provider response exceeded the ${what} limit of ${limit} bytes`);
+    this.name = "ProviderResponseTooLargeError";
+  }
+}
+
+/** Read a non-streaming body without trusting it to be a sane size. */
+async function readBoundedText(response: Response, limit: number): Promise<string> {
+  if (!response.body) return "";
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytes = 0;
+  // @ts-ignore Node's fetch body is an async iterable at runtime.
+  for await (const chunk of response.body) {
+    bytes += chunk.length ?? 0;
+    if (bytes > limit) throw new ProviderResponseTooLargeError(limit, "error body");
+    text += decoder.decode(chunk, { stream: true });
+  }
+  return text + decoder.decode();
+}
+
 async function collectThirdPartyResponsesBody(response: Response): Promise<CollectedThirdPartyResponses> {
   const calls = new Map<string, GatewaySubagentDispatchCall>();
   const events: string[] = [];
+  let collectedBytes = 0;
+
+  const remember = (event: string): void => {
+    if (event.length > MAX_COLLECTED_SINGLE_EVENT_BYTES) {
+      throw new ProviderResponseTooLargeError(MAX_COLLECTED_SINGLE_EVENT_BYTES, "single event");
+    }
+    collectedBytes += event.length;
+    if (collectedBytes > MAX_COLLECTED_EVENT_BYTES) {
+      throw new ProviderResponseTooLargeError(MAX_COLLECTED_EVENT_BYTES, "accumulated response");
+    }
+    events.push(event);
+  };
+
   let responseObject: any;
   const contentType = response.headers.get("content-type") || "";
 
@@ -251,7 +298,7 @@ async function collectThirdPartyResponsesBody(response: Response): Promise<Colle
   };
 
   if (!response.body || !contentType.toLowerCase().includes("text/event-stream")) {
-    const raw = await response.text();
+    const raw = await readBoundedText(response, MAX_COLLECTED_ERROR_BODY_BYTES);
     let json: any;
     try { json = JSON.parse(raw); } catch { json = undefined; }
     const output = json?.response || json;
@@ -271,13 +318,13 @@ async function collectThirdPartyResponsesBody(response: Response): Promise<Colle
     buffer = chunks.pop() || "";
     for (const event of chunks) {
       if (!event.trim()) continue;
-      events.push(event);
+      remember(event);
       observe(event);
     }
   }
   buffer += decoder.decode();
   if (buffer.trim()) {
-    events.push(buffer);
+    remember(buffer);
     observe(buffer);
   }
   return { events, response: responseObject, calls: Array.from(calls.values()) };

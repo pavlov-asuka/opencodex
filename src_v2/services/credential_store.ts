@@ -8,6 +8,7 @@ import path from "node:path";
 import os from "node:os";
 import { ProviderConfig } from "../core/types.js";
 import { secretStore } from "../platform/secrets.js";
+import { writeJsonAtomic } from "../core/atomic_write.js";
 
 /**
  * Restore-native keeps provider identities, endpoints, and credentials, but
@@ -165,8 +166,7 @@ export class CredentialStore {
         const { api_key: _apiKey, refresh_token: _refreshToken, ...safeProvider } = provider;
         return safeProvider;
       });
-      fs.writeFileSync(CredentialStore.providersConfigPath, JSON.stringify({ providers: safeProviders }, null, 2), { encoding: "utf-8", mode: 0o600 });
-      fs.chmodSync(CredentialStore.providersConfigPath, 0o600);
+      writeJsonAtomic(CredentialStore.providersConfigPath, { providers: safeProviders });
       CredentialStore.cachedProviders = safeProviders;
       CredentialStore.lastMtime = fs.statSync(CredentialStore.providersConfigPath).mtimeMs;
     } catch (e: any) {

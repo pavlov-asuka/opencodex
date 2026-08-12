@@ -20,7 +20,37 @@ test("provider APIs never return plaintext credentials", async () => {
   assert.match(source, /api_key_configured/);
   assert.match(store, /OpenCodex Provider Credential/);
   assert.match(store, /delete provider\.api_key/);
-  assert.match(store, /posixPermissions|chmodSync/);
+});
+
+test("providers.json is written with restrictive permissions", async () => {
+  // Was a regex for /posixPermissions|chmodSync/ over credential_store.ts,
+  // which broke the moment the write moved into writeJsonAtomic even though
+  // the permissions were unchanged. Check the file instead of the spelling.
+  const { CredentialStore } = await import("../dist/services/credential_store.js");
+  const fs = await import("node:fs/promises");
+  const os = await import("node:os");
+  const path = await import("node:path");
+
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "opencodex-perm-"));
+  const previous = process.env.OPENCODEX_DATA_DIR;
+  process.env.OPENCODEX_DATA_DIR = dataDir;
+  try {
+    CredentialStore.saveProviders([{ name: "deepseek", base_url: "https://api.deepseek.com/v1", models: [] }]);
+    const target = path.join(dataDir, "providers.json");
+    const stats = await fs.stat(target);
+
+    // Windows does not implement POSIX mode bits, so only the owner-only
+    // guarantee is checkable there: no group or world bits on POSIX.
+    if (process.platform !== "win32") {
+      assert.equal(stats.mode & 0o077, 0, "providers.json must not be readable by group or world");
+    }
+    const written = JSON.parse(await fs.readFile(target, "utf8"));
+    assert.equal(written.providers[0].api_key, undefined, "no credential may reach the file");
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODEX_DATA_DIR;
+    else process.env.OPENCODEX_DATA_DIR = previous;
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
 });
 
 test("the gateway never builds a shell command string", async () => {

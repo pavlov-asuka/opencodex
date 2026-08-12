@@ -8,6 +8,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { writeJsonAtomic } from "../core/atomic_write.js";
 
 export function codexHomePath(): string {
   const configured = String(process.env.CODEX_HOME || "").trim();
@@ -133,8 +134,6 @@ export function bridgeEnvironmentValues(
 export function adoptNativeEgressOverride(dataDir?: string): void {
   const override = nativeEgressUserOverride();
   if (override === undefined || override === nativeEgressSetting(dataDir)) return;
-  const settingPath = nativeEgressSettingPath(dataDir);
-  fs.mkdirSync(path.dirname(settingPath), { recursive: true });
-  fs.writeFileSync(settingPath, `${JSON.stringify({ enabled: override }, null, 2)}\n`, "utf-8");
+  writeJsonAtomic(nativeEgressSettingPath(dataDir), { enabled: override });
   console.log(`[OpenCodex Gateway] Adopted OPENCODEX_NATIVE_EGRESS=${override ? "1" : "0"} from the environment.`);
 }
