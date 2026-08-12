@@ -27,16 +27,6 @@ import { bridgeEnvironmentValues, codexConfigPath, codexHomePath, BRIDGE_ENVIRON
 import { runPowerShell } from "./powershell.js";
 import type { DesktopAppServerState, DesktopController } from "./types.js";
 
-/** Image names to terminate when restarting the Desktop client. */
-const DESKTOP_IMAGE_NAMES = [
-  "ChatGPT.exe",
-  "Codex.exe",
-  "ChatGPT Classic.exe",
-  "codex.exe",
-  "codex-provider-bridge.exe",
-  "codex-code-mode-host.exe",
-];
-
 /** MSIX package names that can host the Codex Desktop client, best first. */
 const DESKTOP_PACKAGE_NAMES = ["OpenAI.Codex", "OpenAI.ChatGPT-Desktop"];
 
@@ -138,24 +128,64 @@ function scanWindowsAppsForDesktop(): PackageInfo | null {
   return null;
 }
 
-/** JSON snapshot of running Codex-related processes and their command lines. */
-function runningCodexProcesses(): Array<{ name: string; commandLine: string }> {
+type CodexProcess = { name: string; commandLine: string; processId: number; executablePath: string };
+
+/** JSON snapshot of running Codex-related processes. */
+function runningCodexProcesses(): CodexProcess[] {
   try {
     const raw = runPowerShell(
       "$r = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | " +
       "Where-Object { $_.Name -like 'codex*' -or $_.Name -like 'ChatGPT*' } | " +
-      "ForEach-Object { [ordered]@{ name = $_.Name; commandLine = ($_.CommandLine -as [string]) } }); " +
+      "ForEach-Object { [ordered]@{ name = $_.Name; commandLine = ($_.CommandLine -as [string]); " +
+      "processId = $_.ProcessId; executablePath = ($_.ExecutablePath -as [string]) } }); " +
       "[Console]::Out.Write((ConvertTo-Json -Compress -Depth 3 @($r)))",
     );
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     const list = Array.isArray(parsed) ? parsed : [parsed];
-    return list
-      .filter(Boolean)
-      .map((entry: any) => ({ name: String(entry?.name || ""), commandLine: String(entry?.commandLine || "") }));
+    return list.filter(Boolean).map((entry: any) => ({
+      name: String(entry?.name || ""),
+      commandLine: String(entry?.commandLine || ""),
+      processId: Number(entry?.processId) || 0,
+      executablePath: String(entry?.executablePath || ""),
+    }));
   } catch {
     return [];
   }
+}
+
+/**
+ * Directories whose processes belong to the Desktop install OpenCodex drives.
+ *
+ * Ownership is decided by where the executable lives, not by what it is
+ * called. A second ChatGPT installation, or an unrelated app that happens to
+ * ship a `ChatGPT.exe`, is somebody else's.
+ */
+function managedDesktopRoots(): string[] {
+  const roots: string[] = [];
+  const installed = desktopPackage();
+  if (installed?.installLocation) roots.push(installed.installLocation);
+
+  const configured = String(process.env.OPENCODEX_DESKTOP_APP_PATH || "").trim();
+  if (configured) roots.push(path.dirname(configured));
+
+  // The bridge and the helper executables staged beside it are unambiguously
+  // ours, wherever OpenCodex was unpacked.
+  const bridge = win32DesktopController.providerBridgePath();
+  if (bridge) roots.push(path.dirname(bridge));
+
+  return [...new Set(roots.map((root) => path.resolve(root).toLowerCase()))];
+}
+
+export function isManagedDesktopProcess(entry: CodexProcess, roots: string[]): boolean {
+  const executable = entry.executablePath.toLowerCase();
+  if (executable) {
+    const resolved = path.resolve(executable);
+    if (roots.some((root) => resolved === root || resolved.startsWith(`${root}${path.sep}`))) return true;
+  }
+  // ExecutablePath is empty when the query lacks rights to read it. These two
+  // names are OpenCodex's own staged binaries, so the name alone is enough.
+  return /^(codex-provider-bridge|codex-code-mode-host)\.exe$/i.test(entry.name);
 }
 
 /**
@@ -297,11 +327,29 @@ export const win32DesktopController: DesktopController = {
   },
 
   stopDesktopClients(): void {
-    for (const image of DESKTOP_IMAGE_NAMES) {
+    // This used to run `taskkill /F /T /IM` over a list of image names that
+    // includes ChatGPT.exe — a global force-kill of every matching process on
+    // the machine, whether or not OpenCodex had anything to do with it. Other
+    // Codex windows, parallel work and unsaved state went with it.
+    const roots = managedDesktopRoots();
+    const running = runningCodexProcesses();
+    const targets = running.filter((entry) => entry.processId > 0 && isManagedDesktopProcess(entry, roots));
+
+    if (targets.length === 0) {
+      if (running.length > 0) {
+        console.warn(
+          "[OpenCodex Gateway] Codex/ChatGPT processes are running but none could be traced to the installation "
+          + "OpenCodex manages, so none were stopped. Restart Codex Desktop manually to pick up the change.",
+        );
+      }
+      return;
+    }
+
+    for (const target of targets) {
       try {
-        execFileSync("taskkill", ["/F", "/T", "/IM", image], { stdio: "ignore", windowsHide: true });
+        execFileSync("taskkill", ["/F", "/T", "/PID", String(target.processId)], { stdio: "ignore", windowsHide: true });
       } catch {
-        // taskkill exits non-zero when the image is not running.
+        // Already gone, or terminated as part of an earlier process tree.
       }
     }
   },
