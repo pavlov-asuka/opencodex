@@ -1,15 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { getDashboardHtml } from "../dist/services/dashboard/index.js";
 
-// The control centre is assembled from several modules now; these contracts
-// are about what the served page contains, so read the composed source.
-const source = async () => {
-  const parts = await Promise.all(["styles", "markup", "app", "shell", "index"].map(
-    (name) => readFile(new URL(`../src_v2/services/dashboard/${name}.ts`, import.meta.url), "utf8"),
-  ));
-  return parts.join("\n");
-};
+/**
+ * These contracts are about what the served page contains, so read the page.
+ *
+ * This used to concatenate the five TypeScript modules and grep that. The
+ * difference matters: a module dropped from the composition, or a section the
+ * renderer stops emitting, leaves the source text untouched and every
+ * assertion below still passing while the feature is gone from the page.
+ */
+const source = async () => getDashboardHtml();
 
 test("dashboard keeps visible progress states for destructive and network actions", async () => {
   const text = await source();

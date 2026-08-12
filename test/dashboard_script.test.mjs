@@ -85,6 +85,23 @@ test("the images the page references are served", async () => {
   }
 });
 
+test("no served image is wildly oversized for a portable release", async () => {
+  // The brand logo shipped at 1254x1254 and 866 KB for a slot the stylesheet
+  // sizes to 42 px. Two of them made up more than half of a 2.6 MB download.
+  // The cap is generous — it only catches an original pasted in unscaled.
+  const LIMIT_BYTES = 200 * 1024;
+  const sources = [...html.matchAll(/<img[^>]+src="([^"]+)"/g)].map((match) => match[1]);
+
+  for (const source of sources) {
+    if (!source.startsWith("/")) continue;
+    const { body } = await get(source);
+    assert.ok(
+      body.length <= LIMIT_BYTES,
+      `${source} is ${Math.round(body.length / 1024)} KB; downscale it before shipping`,
+    );
+  }
+});
+
 test("stop the gateway", async () => {
   await server.stop();
   if (previousDataDir === undefined) delete process.env.OPENCODEX_DATA_DIR;
