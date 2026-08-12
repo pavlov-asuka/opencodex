@@ -124,14 +124,17 @@ empty task (upstream: openai/codex#32031).
 
 \`OPENCODEX_AGENT_MESSAGE_ORACLE=1\` enables recovery: the envelope is replayed to
 ChatGPT over your own Codex credentials with a forced extraction call, and the
-returned plaintext is handed to the routed child as ordinary input. It is off by
-default because it spends one extra ChatGPT Responses request per distinct task
-and relies on an undocumented internal format. With it off, such a turn fails
-with \`unreadable_encrypted_agent_task\` rather than starting a child blind.
+returned plaintext is handed to the routed child as ordinary input. It is **on by
+default**, because without it a third-party child receives an empty task and the
+turn fails with \`unreadable_encrypted_agent_task\` — routing models as subagents
+does not work at all. The cost is one extra ChatGPT Responses request per
+distinct task, and a dependency on an undocumented internal format. Comment the
+line out in \`opencodex.env\` if you would rather have third-party subagents fail
+than spend that request.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| \`OPENCODEX_AGENT_MESSAGE_ORACLE\` | off | Recover encrypted subagent tasks |
+| \`OPENCODEX_AGENT_MESSAGE_ORACLE\` | **on** | Recover encrypted subagent tasks |
 | \`OPENCODEX_AGENT_MESSAGE_ORACLE_MODEL\` | \`gpt-5.6-sol\` | Model used for extraction |
 | \`OPENCODEX_AGENT_MESSAGE_ORACLE_TIMEOUT_MS\` | \`60000\` | Extraction timeout |
 | \`OPENCODEX_WINDOWS_LAUNCH_MODE\` | \`shell\` | \`direct\` launches Desktop bypassing shell activation |
@@ -222,10 +225,11 @@ async function main() {
       "# Lines are KEY=VALUE; remove a line to fall back to the default.",
       "",
       "# Recover encrypted subagent task payloads through your own Codex",
-      "# credentials. Off by default, matching the table in README.md: it",
-      "# costs one extra ChatGPT request per distinct subagent task and",
-      "# depends on an undocumented payload format. Uncomment to opt in.",
-      "# OPENCODEX_AGENT_MESSAGE_ORACLE=1",
+      "# credentials. On by default: without it a third-party subagent receives",
+      "# an empty task and the turn fails, so routing models as subagents - the",
+      "# reason this fork exists - does not work at all. It costs one extra",
+      "# ChatGPT request per distinct subagent task. Comment out to disable.",
+      "OPENCODEX_AGENT_MESSAGE_ORACLE=1",
       "",
       "# Gateway port.",
       "# OPENCODEX_PORT=8765",

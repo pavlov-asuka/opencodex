@@ -95,7 +95,7 @@ TOML 转义修复与平台无关,已提交给上游项目:[AITabby/codexsplit#37
 
 | 变量 | 默认 | 作用 |
 | --- | --- | --- |
-| `OPENCODEX_AGENT_MESSAGE_ORACLE` | 关闭 | 恢复加密的子代理任务载荷(见下) |
+| `OPENCODEX_AGENT_MESSAGE_ORACLE` | **开启** | 恢复加密的子代理任务载荷(见下)。**关掉它,第三方子代理就完全不可用** |
 | `OPENCODEX_AGENT_MESSAGE_ORACLE_MODEL` | `gpt-5.6-sol` | 用于提取的模型 |
 | `OPENCODEX_AGENT_MESSAGE_ORACLE_TIMEOUT_MS` | `60000` | 提取超时 |
 | `OPENCODEX_PORT` | `8765` | 网关端口。**不设**时,若 8765 已被别的程序占用,网关会自动顺延到下一个空闲端口(最多试 10 个)并把新端口写进 Codex 配置;**显式设置**时端口被占用会直接报错而不是偷偷换 |
@@ -152,7 +152,9 @@ Codex 启动原生 app-server 时,本项目默认会把它的  改写到 bridge 
 - [openai/codex#32031](https://github.com/openai/codex/issues/32031)
 - [lidge-jun/opencodex#92](https://github.com/lidge-jun/opencodex/issues/92) —— 同一问题的详细分析,至今开放
 
-`OPENCODEX_AGENT_MESSAGE_ORACLE=1` 提供了一条恢复路径(技术方案由 [@Joseffb](https://github.com/Joseffb) 在 [lidge-jun/opencodex#92](https://github.com/lidge-jun/opencodex/issues/92) 中公开):把信封用**你自己的 Codex 凭据**发回 ChatGPT,配合一次强制函数调用,由后端解密自己的密文并把明文作为函数参数返回,再转成标准输入交给第三方模型。**代价是每个不同任务多一次 ChatGPT 请求**,且依赖未公开的内部格式。关闭时该轮次会明确失败(`unreadable_encrypted_agent_task`),而不是让子代理拿着空任务运行。
+`OPENCODEX_AGENT_MESSAGE_ORACLE=1` 提供了一条恢复路径(技术方案由 [@Joseffb](https://github.com/Joseffb) 在 [lidge-jun/opencodex#92](https://github.com/lidge-jun/opencodex/issues/92) 中公开):把信封用**你自己的 Codex 凭据**发回 ChatGPT,配合一次强制函数调用,由后端解密自己的密文并把明文作为函数参数返回,再转成标准输入交给第三方模型。**代价是每个不同任务多一次 ChatGPT 请求**,且依赖未公开的内部格式。
+
+**这一项默认开启**,因为关掉它第三方子代理就完全不可用 —— 该轮次会明确失败(`unreadable_encrypted_agent_task`),而不是让子代理拿着空任务运行。如果你宁可让第三方子代理失败也不想多花那次请求,在 `opencodex.env` 里把该行注释掉即可。
 
 **其他:**
 
