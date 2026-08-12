@@ -78,11 +78,41 @@ test("Sec-Fetch headers alone are enough to refuse", async () => {
 });
 
 test("Codex and the bridge are unaffected", async () => {
-  // Neither sends Origin or Sec-Fetch-*. The request must get past the guard;
-  // what it does upstream is not this test's business, only that 403 is not
-  // the answer.
   const res = await post("/v1/responses", { Authorization: "Bearer dummy" });
   assert.notEqual(res.status, 403, "a non-browser caller must not be refused by the browser guard");
+});
+
+test("a bridge-forwarded request is allowed even carrying browser headers", async () => {
+  // The case the first version of this guard broke in production. The bridge's
+  // native-egress router copies request headers through a denylist, so
+  // whatever native Codex sends — Origin, Sec-Fetch-* — arrives here verbatim
+  // on a real subagent turn. The original test asserted the opposite by
+  // construction: it sent no browser headers and concluded Codex sends none.
+  const res = await post("/v1/responses", {
+    Authorization: `Bearer ${server.adminToken}`,
+    Origin: "https://chatgpt.com",
+    "Sec-Fetch-Site": "cross-site",
+    "Sec-Fetch-Mode": "cors",
+  });
+  assert.notEqual(res.status, 403, "possession of the gateway token outranks any header heuristic");
+});
+
+test("browser headers still lose without the token", async () => {
+  // The same shape minus the token is exactly the forgery this guard exists
+  // for, so the allowance above must not have opened it back up.
+  const res = await post("/v1/responses", {
+    Origin: "https://chatgpt.com",
+    "Sec-Fetch-Site": "cross-site",
+  });
+  assert.equal(res.status, 403);
+});
+
+test("a wrong token does not pass", async () => {
+  const res = await post("/v1/responses", {
+    Authorization: `Bearer ${"x".repeat(String(server.adminToken).length)}`,
+    Origin: "https://evil.example.com",
+  });
+  assert.equal(res.status, 403, "only the real token counts");
 });
 
 test("the dashboard itself still loads", async () => {

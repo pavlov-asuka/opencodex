@@ -559,12 +559,48 @@ function readRequestBody(req: http.IncomingMessage): Promise<Buffer> {
   });
 }
 
-function localEgressHeaders(req: http.IncomingMessage): Record<string, string> {
-  const headers = copyNativeRequestHeaders(req, {}, true);
+/**
+ * The gateway's own bearer token, as Codex is configured to present it.
+ *
+ * Read from the managed provider block rather than passed in, because the
+ * bridge is spawned by Codex Desktop and never sees the gateway's startup.
+ */
+function gatewayAdminToken(): string {
+  try {
+    const content = fs.readFileSync(path.join(codexHomePath(), "config.toml"), "utf8");
+    const section = content.indexOf("[model_providers.opencodex]");
+    if (section < 0) return "";
+    return cleanString(content.slice(section).match(/experimental_bearer_token\s*=\s*"([^"]+)"/)?.[1]);
+  } catch {
+    return "";
+  }
+}
+
+type NativeEgressRoute = "gateway" | "native";
+
+function localEgressHeaders(req: http.IncomingMessage, route: NativeEgressRoute): Record<string, string> {
+  const headers = copyNativeRequestHeaders(req, {}, route === "native");
   // The bridge sends the decompressed request bytes. Keep the upstream from
   // trying to decode them a second time and avoid compressed response bodies
   // while streaming back into native Codex.
   headers["accept-encoding"] = "identity";
+
+  // Forwarding the caller's browser headers to a different origin says nothing
+  // true about this request, and the gateway reads them as evidence that a web
+  // page is driving it. Strip them at the hop that changes origin.
+  for (const name of Object.keys(headers)) {
+    const lower = name.toLowerCase();
+    if (lower === "origin" || lower === "referer" || lower.startsWith("sec-fetch-")) delete headers[name];
+  }
+
+  if (route === "gateway") {
+    // Prove to the gateway that this came from the bridge. Native Codex's own
+    // bearer is meaningless there, and without this the endpoint cannot tell a
+    // routed subagent turn from a web page pointed at 127.0.0.1.
+    const token = gatewayAdminToken();
+    if (token) headers.authorization = `Bearer ${token}`;
+    else console.error("[OpenCodex Native Egress] no gateway token in config.toml; the gateway may refuse this request");
+  }
   return headers;
 }
 
@@ -608,12 +644,13 @@ async function proxyNativeEgressRequest(
   targetUrl: string,
   body: Buffer,
   operation: string,
+  route: NativeEgressRoute,
   onResponseHeaders?: (headers: Headers) => void,
 ): Promise<void> {
   try {
     const upstreamRes = await fetchUpstream(targetUrl, {
       method: req.method || "POST",
-      headers: localEgressHeaders(req),
+      headers: localEgressHeaders(req, route),
       body: body as any,
       maxAttempts: 1,
       timeoutMs: 600_000,
@@ -704,6 +741,7 @@ async function handleNativeEgressRequest(
     targetUrl,
     body,
     `native-${route}-${endpoint.replace(/^\//, "") || "root"}`,
+    route,
     route === "gateway" ? (responseHeaders) => {
       const update = rememberNativeSubagentDisplaySettings(subagentDisplaySettings, parsedBody, req.headers, responseHeaders);
       if (update) onSubagentDisplaySettings?.(update);

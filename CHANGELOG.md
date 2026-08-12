@@ -13,7 +13,9 @@
 
 ### 安全
 
-- **拒绝浏览器发起的上游请求**(P1-4)。此前只有 `/api/*` 有鉴权,而 `/v1/responses`、`/responses/compact`、`/v1/images/generations` 是敞开的,且网关会把缺失或占位的 bearer 替换成 `auth.json` 里真实的 ChatGPT access token。任意网页都能用 `Content-Type: text/plain`(简单请求,不触发预检)向 127.0.0.1 发起请求,并以用户身份执行。CORS 会挡住读取响应,所以这是盲发请求伪造而非 token 泄露 —— 但请求确实执行了,消耗用户配额。绑定回环地址不构成防护。
+- **上游入口需要凭令牌访问**(P1-4)。此前只有 `/api/*` 有鉴权,而 `/v1/responses`、`/responses/compact`、`/v1/images/generations` 是敞开的,且网关会把缺失或占位的 bearer 替换成 `auth.json` 里真实的 ChatGPT access token。任意网页都能用 `Content-Type: text/plain`(简单请求,不触发预检)向 127.0.0.1 发起请求,并以用户身份执行。CORS 会挡住读取响应,所以这是盲发请求伪造而非 token 泄露 —— 但请求确实执行了,消耗用户配额。绑定回环地址不构成防护。
+
+  判定依据是**是否持有网关令牌**,而不是请求头像不像浏览器:网页拿不到该令牌,也无法在简单请求上设置 `Authorization`(会触发预检)。bridge 在把原生出口请求转发给网关时会附带该令牌,并在这一跳剥掉 `Origin`/`Referer`/`Sec-Fetch-*` —— 把调用方的浏览器请求头转发到另一个 origin 本就没有意义。浏览器特征仅作为无令牌时的兜底。
 - **移除子代理的 shell 执行**(P1-5)。原实现无条件调用 `/bin/zsh -lc`,在 Windows 上必然失败。改成 cmd/PowerShell 会把一个坏掉的功能变成能用的漏洞:工作目录之外没有任何约束,完全绕开 Codex 的审批与沙箱链路。
 
 ### 修复

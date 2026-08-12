@@ -1578,16 +1578,31 @@ export class CodexBridgeServer {
    * theft: someone else's page spending the user's quota and acting as them.
    *
    * Listening on 127.0.0.1 is no defence; a browser reaches loopback happily.
-   * No legitimate caller here is a browser — Codex and the bridge send neither
-   * header — so their presence alone is disqualifying.
+   *
+   * Authentication comes first and browser headers are only the backstop. The
+   * first version of this guard had it the other way round, on the assumption
+   * that no legitimate caller sends Origin or Sec-Fetch-*. That was wrong: the
+   * bridge's native-egress router copies request headers through a denylist,
+   * so whatever native Codex sends arrives here verbatim, and real subagent
+   * turns were refused with this very 403. A page cannot obtain the admin
+   * token, and cannot set Authorization on a simple request without a
+   * preflight, so proving possession is the signal that actually separates
+   * them.
    */
   private rejectBrowserOriginatedRequest(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+    if (this.isAdminAuthorized(req)) return false;
+
     const header = (name: string): string => {
       const value = req.headers[name];
       if (Array.isArray(value)) return value[0] || "";
       return typeof value === "string" ? value : "";
     };
-    if (!header("origin") && !header("sec-fetch-site") && !header("sec-fetch-mode")) return false;
+    const offending = ["origin", "sec-fetch-site", "sec-fetch-mode"].filter((name) => header(name));
+    if (offending.length === 0) return false;
+
+    console.warn(
+      `[OpenCodex Gateway] Refused an unauthenticated ${req.method} ${req.url} carrying ${offending.join(", ")}`,
+    );
 
     res.writeHead(403, { "Content-Type": "application/json", "Cache-Control": "no-store" });
     res.end(JSON.stringify({
