@@ -11,6 +11,7 @@ import path from "node:path";
 import os from "node:os";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { spawn, execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { GatewayRouter, type GatewaySubagentDispatchCall, type GatewaySubagentDispatchContext, type GatewaySubagentDispatchResult } from "./router.js";
 import { clearProviderModelSelections, CredentialStore } from "../services/credential_store.js";
 import { RequestDecompressor } from "../core/decompressor.js";
@@ -2834,10 +2835,14 @@ export class CodexBridgeServer {
 
         if (req.method === "GET" && (url.pathname === "/assets/opencodex-logo.png" || url.pathname === "/assets/opencodex-logo-compact.png")) {
           const logoFile = url.pathname.endsWith("-compact.png") ? "opencodex-logo-compact.png" : "opencodex-logo.png";
+          // A portable install has no src_v2 tree and is not started from the
+          // repository, so every path here used to miss and the page rendered
+          // its alt text. The build now stages the images into dist/assets,
+          // which is beside this module wherever the folder was unpacked.
           const possiblePaths = [
+            path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "assets", logoFile),
+            path.join(process.cwd(), "dist", "assets", logoFile),
             path.join(process.cwd(), "src_v2", "assets", logoFile),
-            path.join(process.cwd(), "dist", "src_v2", "assets", logoFile),
-            path.join(os.homedir(), "projects", "opencodex", "src_v2", "assets", logoFile)
           ];
           const found = possiblePaths.find((p) => fs.existsSync(p));
           if (found) {

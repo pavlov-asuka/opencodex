@@ -147,11 +147,25 @@ The bridge runs inside Codex Desktop. After upgrading this folder, restart
 Desktop as well as the gateway; restarting only the gateway leaves the previous
 bridge loaded.
 
+## If port 8765 is taken
+
+Leave \`OPENCODEX_PORT\` unset and the gateway steps to the next free port —
+up to ten — and writes the one it took into the Codex config, so a web server
+or another app already on 8765 is left alone. Set \`OPENCODEX_PORT\` explicitly
+and a busy port is an error instead, rather than a silent move.
+
+One case never steps aside: if the port is held by **another OpenCodex
+gateway**, this one refuses to start. Two instances would fight over
+\`HKCU\\Environment\` and the Codex config, so a second gateway on a different
+port is worse than none.
+
 ## Requirements
 
 - Windows 10/11 x64
-- Node.js 22.19 or newer on PATH
 - Codex Desktop installed (MSIX package \`OpenAI.Codex\`)
+- Node.js 22.19 or newer. A system-wide install is not required: the launcher
+  looks beside \`OpenCodex.exe\` first, then falls back to the runtime Codex
+  Desktop ships at \`%LOCALAPPDATA%\\OpenAI\\Codex\\bin\\node.exe\`.
 `;
 
 async function main() {

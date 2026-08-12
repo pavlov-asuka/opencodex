@@ -40,6 +40,17 @@
 - **网关重启路径硬编码 Homebrew 路径**。`/opt/homebrew/bin/pm2` 在 Intel Mac 上也是错的,Windows 上必然抛异常并被静默接管,但响应仍告诉用户"网关服务正在重新启动"。
 - **日志面板在 Windows 上永远为空**,此前只读 `~/.pm2/logs`。
 
+### 控制中心
+
+- **仪表盘整个脚本此前无法运行。** `app.ts` 里"脱离 OpenCodex"确认框的字符串跨了行;整个文件是 TS 模板字面量,换行在其中合法,所以 tsc 编译通过、测试全绿、金标准文件也对得上 —— 但吐出的 JS 是 `Uncaught SyntaxError`。一个语法错误让脚本整体死掉,所有接口请求都没发出,页面永远停在"正在读取接入模板…"。
+- **图标在便携包里一直是 404。** logo 只存在于 `src_v2/assets/`,构建与打包都没复制它,而网关按 `process.cwd()/src_v2/assets` 查找 —— 发行包里没有 `src_v2/`。现在构建把它放进 `dist/assets`,网关按模块自身位置解析,不再依赖工作目录。
+- 新增 `dashboard_script.test.mjs`:用 `vm.Script` 解析每个内联脚本(等价于浏览器执行前的解析),并逐个请求页面引用的图片断言可用。此前 245 个测试没有一个解析过**产出的 JavaScript**,只验证过生成它的 TypeScript。
+
+### 文档
+
+- README 补齐端口行为:占用者是**另一个 OpenCodex 实例**时一律拒绝启动、不顺延(两个实例会争抢注册表与 Codex 配置)。仅当占用者是别的程序时才顺延。
+- 说明发行包**不需要系统级 Node**:启动器先找包内 `node.exe`,再回落到 Codex Desktop 自带的运行时。
+
 ### 打包
 
 - 移除包内重复的 `dist/OpenCodex.exe`(与根目录字节相同,271 KB,无任何引用)与 `package-lock.json`。包体 3.16 MB → 2.90 MB。

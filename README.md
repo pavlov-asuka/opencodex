@@ -98,7 +98,7 @@ TOML 转义修复与平台无关,已提交给上游项目:[AITabby/codexsplit#37
 | `OPENCODEX_AGENT_MESSAGE_ORACLE` | **开启** | 恢复加密的子代理任务载荷(见下)。**关掉它,第三方子代理就完全不可用** |
 | `OPENCODEX_AGENT_MESSAGE_ORACLE_MODEL` | `gpt-5.6-sol` | 用于提取的模型 |
 | `OPENCODEX_AGENT_MESSAGE_ORACLE_TIMEOUT_MS` | `60000` | 提取超时 |
-| `OPENCODEX_PORT` | `8765` | 网关端口。**不设**时,若 8765 已被别的程序占用,网关会自动顺延到下一个空闲端口(最多试 10 个)并把新端口写进 Codex 配置;**显式设置**时端口被占用会直接报错而不是偷偷换 |
+| `OPENCODEX_PORT` | `8765` | 网关端口。**不设**时,若 8765 已被**别的程序**占用,网关会自动顺延到下一个空闲端口(最多试 10 个)并把新端口写进 Codex 配置;**显式设置**时端口被占用会直接报错而不是偷偷换。若占用者是**另一个 OpenCodex 实例**,则一律拒绝启动、不顺延 —— 两个实例会争抢注册表与 Codex 配置,顺延只会得到两个互相打架的网关 |
 | `OPENCODEX_WINDOWS_LAUNCH_MODE` | `shell` | `direct` 绕过 shell 激活启动 Desktop |
 | `OPENCODEX_MULTI_AGENT_VERSION` | `v2` | 写入模型目录的多 Agent 协议版本 |
 | `OPENCODEX_NATIVE_EGRESS` | `1` | 官方模型流量是否经过本项目的路由代理。见下 |
@@ -165,7 +165,9 @@ Codex 启动原生 app-server 时,本项目默认会把它的  改写到 bridge 
 
 ## 从源码构建
 
-需要 Node.js 22.19+、npm,以及 [Rust](https://rustup.rs)(用于两个可执行文件):
+运行发行包**不需要系统级 Node** —— 启动器先找 `OpenCodex.exe` 旁边的 `node.exe`,找不到就用 Codex Desktop 自带的 `%LOCALAPPDATA%\OpenAI\Codex\bin\node.exe`。
+
+从源码构建则需要 Node.js 22.19+、npm,以及 [Rust](https://rustup.rs)(用于两个可执行文件):
 
 ```bash
 npm install

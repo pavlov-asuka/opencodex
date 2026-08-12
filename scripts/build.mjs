@@ -53,6 +53,20 @@ async function splitServerEntry() {
   await writeFile(path.join(distDir, "server.js"), 'import "./gateway-entry.js";\n', "utf-8");
 }
 
+/**
+ * Images the dashboard references.
+ *
+ * tsc only emits JavaScript, so the logos stayed behind in src_v2/assets and a
+ * portable install answered 404 for them — the page rendered its alt text
+ * instead of a brand. Copying them into dist puts them beside everything else
+ * the package ships.
+ */
+async function stageDashboardAssets() {
+  const source = path.join(repoRoot, "src_v2", "assets");
+  if (!existsSync(source)) return;
+  await cp(source, path.join(distDir, "assets"), { recursive: true });
+}
+
 /** POSIX launcher: a `/bin/sh` wrapper that re-execs Node. */
 async function stagePosixLauncher() {
   const source = path.join(repoRoot, "scripts", "codex-provider-bridge");
@@ -183,6 +197,7 @@ async function main() {
   await compileTypeScript();
   await mkdir(distDir, { recursive: true });
   await splitServerEntry();
+  await stageDashboardAssets();
   await stagePosixLauncher();
   if (wantsWindowsShim) {
     await stageWindowsLauncher();
