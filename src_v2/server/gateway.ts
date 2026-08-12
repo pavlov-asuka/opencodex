@@ -10,8 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { spawn, execFile, execFileSync } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn, execFileSync } from "node:child_process";
 import { GatewayRouter, type GatewaySubagentDispatchCall, type GatewaySubagentDispatchContext, type GatewaySubagentDispatchResult } from "./router.js";
 import { clearProviderModelSelections, CredentialStore } from "../services/credential_store.js";
 import { RequestDecompressor } from "../core/decompressor.js";
@@ -47,7 +46,6 @@ function isResponsesCompactionPath(pathname: string): boolean {
 }
 const SUBAGENT_ROUTE_BINDING_TTL_MS = 30 * 60 * 1000;
 const MAX_SUBAGENT_ROUTE_BINDINGS = 256;
-const execFileAsync = promisify(execFile);
 type SubagentRouteBinding = {
   expiresAt: number;
   route: { model: string; reasoning_effort?: string; profile_id?: string; reason?: string; task_id?: string };
@@ -1011,33 +1009,24 @@ export class CodexBridgeServer {
         }));
         return JSON.stringify({ path: directory, entries });
       }
+      // exec_command is deliberately not implemented here.
+      //
+      // It used to run `execFileAsync("/bin/zsh", ["-lc", command])`
+      // unconditionally, which on Windows — the only platform this fork
+      // targets — meant every third-party subagent that reached for a shell
+      // failed on a missing path. Making it work per-platform was the obvious
+      // repair and the wrong one: resolveSubagentWorkspacePath only constrains
+      // the working directory, so `-lc` still ran an arbitrary login-shell
+      // command with full access to absolute paths, the network and system
+      // tools, outside Codex's approval and sandbox chain entirely.
+      //
+      // The main agent already has that chain. Handing the command back to it
+      // keeps one audited path for execution instead of a second unaudited
+      // one, and the model can act on this answer.
       if (name === "exec_command") {
-        const command = String(args?.cmd || args?.command || "").trim();
-        if (!command) return JSON.stringify({ error: "exec_command 缺少 cmd" });
-        if (args?.sandbox_permissions === "require_escalated") {
-          return JSON.stringify({ error: "子代理不能自动申请桌面权限升级，请由主 Agent 处理该操作" });
-        }
-        const workdir = this.resolveSubagentWorkspacePath(args?.workdir);
-        try {
-          const result: any = await execFileAsync("/bin/zsh", ["-lc", command], {
-            cwd: workdir,
-            timeout: 120_000,
-            maxBuffer: 4 * 1024 * 1024,
-          });
-          return JSON.stringify({
-            command,
-            exit_code: 0,
-            stdout: String(result?.stdout || "").slice(0, 120_000),
-            stderr: String(result?.stderr || "").slice(0, 40_000),
-          });
-        } catch (error: any) {
-          return JSON.stringify({
-            command,
-            exit_code: Number.isFinite(Number(error?.code)) ? Number(error.code) : 1,
-            stdout: String(error?.stdout || "").slice(0, 120_000),
-            stderr: String(error?.stderr || error?.message || "命令执行失败").slice(0, 40_000),
-          });
-        }
+        return JSON.stringify({
+          error: "子代理无法直接执行命令。请把需要执行的命令连同理由返回给主 Agent，由它通过 Codex 的审批与沙箱机制运行。",
+        });
       }
       return JSON.stringify({ error: `网关未实现子代理工具：${name || "(unnamed)"}` });
     } catch (error: any) {
