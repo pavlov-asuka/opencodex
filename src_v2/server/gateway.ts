@@ -2334,7 +2334,11 @@ export class CodexBridgeServer {
 
         if (req.method === "GET" && url.pathname === "/api/providers/presets") {
           const presets = [
-            { id: "deepseek", label: "DeepSeek", defaultBaseUrl: "https://api.deepseek.com/", iconSlug: "deepseek", models: [{ id: "deepseek-v4-flash" }, { id: "deepseek-v4-pro" }] },
+            // deepseek-v4-pro is deliberately absent: DeepSeek's server still
+            // rejects it for Codex integration, and a preset reads as a
+            // verified recommendation. It can be added by hand once that
+            // changes.
+            { id: "deepseek", label: "DeepSeek", defaultBaseUrl: "https://api.deepseek.com/", iconSlug: "deepseek", models: [{ id: "deepseek-v4-flash" }] },
             { id: "qwen", label: "通义千问 (Qwen)", defaultBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", iconSlug: "qwen", models: [{ id: "qwen-max" }, { id: "qwen-plus" }] },
             { id: "minimax", label: "MiniMax", defaultBaseUrl: "https://api.minimaxi.com/v1", iconSlug: "minimax", models: [{ id: "minimax-m3" }] },
             { id: "kimi", label: "Kimi (Moonshot)", defaultBaseUrl: "https://api.moonshot.cn/v1", iconSlug: "kimi", models: [{ id: "moonshot-v1-8k" }] },
@@ -2995,8 +2999,12 @@ export class CodexBridgeServer {
             const configPath = codexConfigPath();
             if (fs.existsSync(configPath)) {
               let content = fs.readFileSync(configPath, "utf-8");
+              // Removing OpenCodex is not a reason to change which official
+              // model the user had chosen. This used to force `model` to a
+              // pinned "gpt-5.5", overwriting their selection and, on an
+              // account that no longer offers that slug, leaving new sessions
+              // failing after what looked like a clean restore.
               content = stripManagedCodexConfig(content);
-              content = content.replace(/^model\s*=\s*".*?"/m, 'model = "gpt-5.5"');
               fs.writeFileSync(configPath, content + "\n", "utf-8");
             }
             const catalogPath = path.join(os.homedir(), ".opencodex", "custom_model_catalog.json");

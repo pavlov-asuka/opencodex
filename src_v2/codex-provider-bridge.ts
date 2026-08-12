@@ -22,7 +22,7 @@ import { RequestDecompressor } from "./core/decompressor.js";
 import { copySafeResponseHeaders, writeHttpResponseChunked } from "./services/http_stream.js";
 import { fetchUpstream, upstreamErrorDetails } from "./services/upstream_fetch.js";
 import { copyNativeRequestHeaders } from "./server/native_headers.js";
-import { nativeEgressEnabled } from "./platform/paths.js";
+import { codexHomePath, nativeEgressEnabled } from "./platform/paths.js";
 
 export type CodexProvider = "openai" | "opencodex";
 
@@ -211,17 +211,43 @@ function classifyRuntimeModel(model: unknown): CodexProvider | null {
   return classifyProviderModel(model, readCatalogs());
 }
 
+/**
+ * Last resort when no native model can be discovered anywhere.
+ *
+ * Every path above this is preferred precisely because a pinned version goes
+ * stale: an account that no longer offers this slug gets a failing session.
+ */
+export const NATIVE_MODEL_LAST_RESORT = "gpt-5.6";
+
+/** Model slugs advertised by whichever catalogs are readable. */
+function catalogModelSlugs(): string[] {
+  const slugs: string[] = [];
+  for (const catalog of readCatalogs()) {
+    const models = (catalog as JsonRecord | null)?.models;
+    if (!Array.isArray(models)) continue;
+    for (const entry of models) {
+      const record = entry as JsonRecord | null;
+      const slug = cleanString(record?.slug ?? record?.model ?? record?.id);
+      if (slug) slugs.push(slug);
+    }
+  }
+  return slugs;
+}
+
 function nativeDefaultModel(): string {
   const configured = cleanString(process.env.OPENCODEX_NATIVE_MODEL);
   if (configured && classifyRuntimeModel(configured) === NATIVE_PROVIDER) return configured;
   try {
-    const configPath = path.join(os.homedir(), ".codex", "config.toml");
-    const content = fs.readFileSync(configPath, "utf8");
+    const content = fs.readFileSync(path.join(codexHomePath(), "config.toml"), "utf8");
     const match = content.match(/^\s*model\s*=\s*["']([^"']+)["']/m);
     const model = cleanString(match?.[1]);
     if (model && classifyRuntimeModel(model) === NATIVE_PROVIDER) return model;
   } catch {}
-  return "gpt-5.5";
+  // Ask the live catalog before falling back to a version written in 2026.
+  for (const slug of catalogModelSlugs()) {
+    if (classifyRuntimeModel(slug) === NATIVE_PROVIDER) return slug;
+  }
+  return NATIVE_MODEL_LAST_RESORT;
 }
 
 function normalizeProvider(value: unknown): CodexProvider | null {

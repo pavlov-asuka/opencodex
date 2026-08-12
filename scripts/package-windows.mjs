@@ -58,7 +58,7 @@ if not defined OPENCODEX_PORT set "OPENCODEX_PORT=8765"
 where node >nul 2>nul
 if errorlevel 1 (
   echo Node.js is required but was not found on PATH.
-  echo Install Node.js 20 or newer from https://nodejs.org and run this again.
+  echo Install Node.js 22.19 or newer from https://nodejs.org and run this again.
   pause
   exit /b 1
 )
@@ -147,7 +147,7 @@ bridge loaded.
 ## Requirements
 
 - Windows 10/11 x64
-- Node.js 20 or newer on PATH
+- Node.js 22.19 or newer on PATH
 - Codex Desktop installed (MSIX package \`OpenAI.Codex\`)
 `;
 
@@ -215,9 +215,10 @@ async function main() {
       "# Lines are KEY=VALUE; remove a line to fall back to the default.",
       "",
       "# Recover encrypted subagent task payloads through your own Codex",
-      "# credentials. Costs one extra ChatGPT request per distinct task.",
-      "# Remove this line to disable it.",
-      "OPENCODEX_AGENT_MESSAGE_ORACLE=1",
+      "# credentials. Off by default, matching the table in README.md: it",
+      "# costs one extra ChatGPT request per distinct subagent task and",
+      "# depends on an undocumented payload format. Uncomment to opt in.",
+      "# OPENCODEX_AGENT_MESSAGE_ORACLE=1",
       "",
       "# Gateway port.",
       "# OPENCODEX_PORT=8765",

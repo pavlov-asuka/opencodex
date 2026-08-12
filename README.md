@@ -158,12 +158,12 @@ Codex 启动原生 app-server 时,本项目默认会把它的  改写到 bridge 
 
 - 这是**便携目录,不是安装程序**。
 - 只在 Windows 11 + 新版统一 ChatGPT Desktop(MSIX 包 `OpenAI.Codex`)上验证过。
-- `deepseek-v4-pro` 目前会被 DeepSeek 服务端拒绝(提示 Codex 集成尚未开放),与本项目无关。
+- `deepseek-v4-pro` 目前会被 DeepSeek 服务端拒绝(提示 Codex 集成尚未开放),与本项目无关。因此它**不在默认预设里**;等 DeepSeek 开放后手动添加即可。
 - 代码里保留了 macOS 平台层,但没有在 macOS 上回归测试过。
 
 ## 从源码构建
 
-需要 Node.js 20+、npm,以及 [Rust](https://rustup.rs)(用于两个可执行文件):
+需要 Node.js 22.19+、npm,以及 [Rust](https://rustup.rs)(用于两个可执行文件):
 
 ```bash
 npm install

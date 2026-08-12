@@ -3,6 +3,9 @@
   "version": "2.1.0",
   "description": "OpenCodex - The Unified Codex Desktop Unlocker, Custom Model Gateway & Computer Use Router",
   "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "scripts": {
     "build": "node scripts/build.mjs",
     "build:windows": "node scripts/build.mjs --windows",
